@@ -59,6 +59,20 @@ pub struct TimedEffect {
     pub remaining: f32,
 }
 
+/// Tracks an enemy's "hit flash": while active, the enemy renders with a bright
+/// emissive material so a hit reads instantly. When the timer runs out the
+/// original material is restored.
+#[derive(Debug, Clone, Copy)]
+pub struct HitFlash {
+    pub remaining: f32,
+    pub original_material: crate::asset::Handle<crate::asset::Material>,
+}
+
+/// The shared bright material swapped onto enemies while they flash from a hit.
+/// Created during setup as engine plumbing (not scene content).
+#[derive(Debug, Clone, Copy)]
+pub struct EnemyFlashMaterial(pub crate::asset::Handle<crate::asset::Material>);
+
 pub fn register_default_systems(schedule: &mut Schedule) {
     schedule.add_system(Stage::Update, menu::system);
     schedule.add_system(Stage::Update, player::input_system);
@@ -67,6 +81,7 @@ pub fn register_default_systems(schedule: &mut Schedule) {
     schedule.add_system(Stage::FixedUpdate, physics_sync::step_physics);
     schedule.add_system(Stage::LateUpdate, player::sync_system);
     schedule.add_system(Stage::LateUpdate, enemy::system);
+    schedule.add_system(Stage::LateUpdate, enemy::feedback_system);
     schedule.add_system(Stage::Render, render::system);
     schedule.add_system(Stage::PostRender, input::system);
 }

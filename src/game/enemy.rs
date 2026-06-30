@@ -11,6 +11,9 @@ pub struct EnemyAI {
     pub max_health: f32,
     pub is_alive: bool,
     pub waypoint_threshold: f32,
+    /// Seconds of "stagger" remaining: while > 0 the enemy holds still so a hit
+    /// reads as a visible flinch instead of uninterrupted patrolling.
+    pub stagger_timer: f32,
 }
 
 impl EnemyAI {
@@ -23,11 +26,18 @@ impl EnemyAI {
             max_health: health,
             is_alive: true,
             waypoint_threshold: 0.5,
+            stagger_timer: 0.0,
         }
     }
 
     pub fn update(&mut self, transform: &mut Transform, dt: f32) {
         if !self.is_alive || self.waypoints.is_empty() {
+            return;
+        }
+
+        // While staggered from a recent hit, stand still and tick the timer down.
+        if self.stagger_timer > 0.0 {
+            self.stagger_timer -= dt;
             return;
         }
 

@@ -40,7 +40,11 @@ impl WeaponModel {
     }
 
     pub fn world_matrix(&self, camera: &Camera) -> Mat4 {
-        // Calculate weapon position in world space relative to camera
+        // Calculate weapon position in world space relative to camera.
+        // Offsets are expressed in view space, where -Z is forward (matching
+        // `camera.forward()`), +X is right and +Y is up. So a negative
+        // `position.z` places the weapon *in front* of the camera; hence the
+        // forward term subtracts `position.z` rather than adding it.
         let camera_forward = camera.forward();
         let camera_right = camera.right();
         let camera_up = camera.up();
@@ -48,12 +52,12 @@ impl WeaponModel {
         // Weapon offset from camera
         let mut offset = camera_right * self.position.x
             + camera_up * self.position.y
-            + camera_forward * self.position.z;
+            - camera_forward * self.position.z;
 
         // Add recoil offset
         offset += camera_right * self.recoil_offset.x
             + camera_up * self.recoil_offset.y
-            + camera_forward * self.recoil_offset.z;
+            - camera_forward * self.recoil_offset.z;
 
         let position = camera.position + offset;
 
@@ -64,13 +68,15 @@ impl WeaponModel {
     }
 
     pub fn muzzle_world_matrix(&self, camera: &Camera, flash_scale: f32) -> Mat4 {
+        // Same view-space convention as `world_matrix`: -Z is forward, so the
+        // forward term subtracts `muzzle_offset.z` to sit in front of the camera.
         let muzzle_offset = self.position
             + Vec3::new(0.0, 0.06, -0.72)
             + self.recoil_offset * Vec3::new(1.0, 1.0, 0.4);
         let position = camera.position
             + camera.right() * muzzle_offset.x
             + camera.up() * muzzle_offset.y
-            + camera.forward() * muzzle_offset.z;
+            - camera.forward() * muzzle_offset.z;
         Mat4::from_scale_rotation_translation(Vec3::splat(flash_scale), camera.rotation, position)
     }
 }

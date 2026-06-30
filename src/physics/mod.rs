@@ -194,6 +194,27 @@ impl PhysicsWorld {
             rb.apply_impulse(vec3_to_rapier(impulse), true);
         }
     }
+
+    /// Fully remove a rigid body, its attached colliders, and any
+    /// collider→entity mappings. Without this, despawning an entity would
+    /// leave a "ghost" collider behind that raycasts still hit.
+    pub fn remove_body(&mut self, handle: RigidBodyHandle) {
+        // Drop entity mappings for every collider attached to this body before
+        // the body (and its colliders) are removed from the sets.
+        if let Some(rb) = self.rigid_body_set.get(handle) {
+            for collider_handle in rb.colliders() {
+                self.collider_entity_map.remove(collider_handle);
+            }
+        }
+        self.rigid_body_set.remove(
+            handle,
+            &mut self.island_manager,
+            &mut self.collider_set,
+            &mut self.impulse_joint_set,
+            &mut self.multibody_joint_set,
+            true,
+        );
+    }
 }
 
 impl Default for PhysicsWorld {

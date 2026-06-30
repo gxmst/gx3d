@@ -347,4 +347,27 @@ mod tests {
         .expect("custom + preset surfaces must parse");
         assert_eq!(scene.entities.len(), 2);
     }
+
+    /// The dust2-style level is the startup scene and is embedded as the
+    /// fallback, so guard that it parses and references the engine-plumbing
+    /// names (`cube`/`sphere`/`rifle`, `box`/`ice`/...) that setup depends on.
+    #[test]
+    fn embedded_dust2_scene_parses() {
+        let text = include_str!("../../../assets/scenes/dust2.json");
+        let scene = Scene::from_json(text).expect("dust2.json must parse");
+        assert_eq!(scene.entities.len(), 24);
+        let mesh_names: Vec<&str> = scene.meshes.iter().map(|m| m.name.as_str()).collect();
+        for required in ["cube", "sphere", "cylinder", "rifle"] {
+            assert!(mesh_names.contains(&required), "missing mesh `{required}`");
+        }
+        let mat_names: Vec<&str> = scene.materials.iter().map(|m| m.name.as_str()).collect();
+        for required in ["box", "bouncy_rubber", "ice", "heavy_metal"] {
+            assert!(
+                mat_names.contains(&required),
+                "missing sandbox material `{required}` (runtime G/B/H spawns need it)"
+            );
+        }
+        let enemies = scene.enemies.expect("dust2 declares enemies");
+        assert_eq!(enemies.spawn_points.len(), 4);
+    }
 }

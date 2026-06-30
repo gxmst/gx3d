@@ -4,7 +4,9 @@ use crate::physics::{PhysicsBody, PhysicsWorld, Ray};
 use crate::renderer::{Camera, RenderMesh};
 use glam::{Quat, Vec3};
 
-use super::{MenuState, MuzzleFlashTimer, TimedEffect, WeaponFeedbackAssets};
+use super::{
+    EnemyFlashMaterial, HitFlash, MenuState, MuzzleFlashTimer, TimedEffect, WeaponFeedbackAssets,
+};
 
 pub fn update_system(world: &mut EngineWorld, resources: &Resources) {
     let dt = resources
@@ -71,11 +73,16 @@ pub fn update_system(world: &mut EngineWorld, resources: &Resources) {
             };
             if let Some(hit) = hit {
                 if let Some(entity) = hit.entity {
-                    if let Ok(mut ai) = world.ecs.get::<&mut EnemyAI>(entity) {
-                        ai.take_damage(damage);
-                        log::info!("Enemy hit! HP: {:.1}", ai.health);
-                    }
-                    if let Ok(body) = world.ecs.get::<&PhysicsBody>(entity) {
+                    let is_enemy = world.ecs.get::<&EnemyAI>(entity).is_ok();
+                    if is_enemy {
+                        react_enemy_hit(
+                            world,
+                            resources,
+                            entity,
+                            damage,
+                            camera_forward.normalize_or_zero(),
+                        );
+                    } else if let Ok(body) = world.ecs.get::<&PhysicsBody>(entity) {
                         if !body.is_static {
                             if let Some(mut physics) = resources.get_mut::<PhysicsWorld>() {
                                 physics.apply_impulse(
@@ -119,6 +126,60 @@ fn update_timed_effects(world: &mut EngineWorld, dt: f32) {
     }
 }
 
+/// Apply the visible reaction when a shot hits an enemy: damage, a brief
+/// stagger, a small knock along the shot direction, and a bright emissive
+/// "flash" material swapped in for a moment. The flash is purely a material
+/// handle swap (cheap, no renderer changes); the original material is stored on
+/// a `HitFlash` component and restored later by `enemy::feedback_system`.
+fn react_enemy_hit(
+    world: &mut EngineWorld,
+    resources: &Resources,
+    entity: hecs::Entity,
+    damage: f32,
+    shot_dir: Vec3,
+) {
+    // Damage + stagger on the AI.
+    if let Ok(mut ai) = world.ecs.get::<&mut EnemyAI>(entity) {
+        ai.take_damage(damage);
+        ai.stagger_timer = 0.18;
+        log::info!("Enemy hit! HP: {:.1}", ai.health);
+    }
+
+    // Nudge the enemy along the shot direction so the hit reads as impact.
+    // Enemies are kinematic (driven by Transform), so we move the Transform
+    // directly rather than applying a physics impulse.
+    if let Ok(mut transform) = world.ecs.get::<&mut Transform>(entity) {
+        transform.position += shot_dir * 0.12;
+    }
+
+    // Swap in the bright flash material, remembering the original so it can be
+    // restored. If the enemy is already flashing, just refresh the timer and
+    // keep the stored original (don't capture the flash material as "original").
+    let flash_material = resources.expect::<EnemyFlashMaterial>().0;
+    let already_flashing = world.ecs.get::<&HitFlash>(entity).is_ok();
+    if already_flashing {
+        if let Ok(mut flash) = world.ecs.get::<&mut HitFlash>(entity) {
+            flash.remaining = 0.12;
+        }
+    } else if let Some(original_material) = world
+        .ecs
+        .get::<&RenderMesh>(entity)
+        .ok()
+        .map(|rm| rm.material)
+    {
+        if let Ok(mut render_mesh) = world.ecs.get::<&mut RenderMesh>(entity) {
+            render_mesh.material = flash_material;
+        }
+        world.add_component(
+            entity,
+            HitFlash {
+                remaining: 0.12,
+                original_material,
+            },
+        );
+    }
+}
+
 fn spawn_hit_feedback(world: &mut EngineWorld, resources: &Resources, point: Vec3, normal: Vec3) {
     let assets = resources
         .expect::<WeaponFeedbackAssets>();
@@ -141,7 +202,8 @@ fn spawn_hit_feedback(world: &mut EngineWorld, resources: &Resources, point: Vec
             material: assets.bullet_hole_material,
         },
     );
-    world.add_component(bullet_hole, TimedEffect { remaining: 22.0 });
+    // Short-lived so impact marks read as feedback, not permanent litter.
+    world.add_component(bullet_hole, TimedEffect { remaining: 3.0 });
 
     let impact = world.spawn();
     world.add_component(

@@ -8,17 +8,17 @@ use glam::Vec3;
 use std::collections::HashMap;
 
 use super::{
-    Enemies, MenuState, MouseLocked, MuzzleFlashTimer, PlayerBody, SceneLights, TextureViews,
-    WeaponFeedbackAssets,
+    Enemies, EnemyFlashMaterial, MenuState, MouseLocked, MuzzleFlashTimer, PlayerBody, SceneLights,
+    TextureViews, WeaponFeedbackAssets,
 };
 
 /// The default scene, compiled into the binary as a fallback so the engine can
 /// always start even if the on-disk scene file is missing or malformed.
-const EMBEDDED_SANDBOX: &str = include_str!("../../../assets/scenes/sandbox.json");
+const EMBEDDED_SCENE: &str = include_str!("../../../assets/scenes/dust2.json");
 
 /// Path (relative to the working directory) of the scene loaded at startup.
 /// Editing this file lets you change the level without recompiling.
-const SCENE_PATH: &str = "assets/scenes/sandbox.json";
+const SCENE_PATH: &str = "assets/scenes/dust2.json";
 
 pub fn register(schedule: &mut Schedule) {
     schedule.add_system(Stage::Startup, setup_scene);
@@ -44,7 +44,7 @@ fn load_scene() -> Scene {
     }
     // The embedded scene is authored alongside the code and is expected to
     // always parse; if it does not, that is a build-time bug worth surfacing.
-    Scene::from_json(EMBEDDED_SANDBOX).expect("embedded sandbox scene must parse")
+    Scene::from_json(EMBEDDED_SCENE).expect("embedded scene must parse")
 }
 
 fn setup_scene(world: &mut EngineWorld, resources: &Resources) {
@@ -140,6 +140,22 @@ fn setup_scene(world: &mut EngineWorld, resources: &Resources) {
         muzzle_flash_mesh: sphere_mesh,
         muzzle_flash_material,
     });
+
+    // Bright emissive material swapped onto enemies for a moment when hit. It is
+    // created here (before the GPU upload below) so its bind group is cached and
+    // the render system never misses it.
+    let enemy_flash_material = asset_manager.materials.insert(Material {
+        name: "Enemy Flash".to_string(),
+        albedo_factor: [1.0, 1.0, 1.0, 1.0],
+        metallic: 0.0,
+        roughness: 0.4,
+        emissive_factor: [6.0, 5.2, 5.0],
+        albedo_map: None,
+        normal_map: None,
+        metallic_roughness_map: None,
+        emissive_map: None,
+    });
+    resources.insert(EnemyFlashMaterial(enemy_flash_material));
 
     // === Physics sandbox shared handles (for runtime G/B/H spawning) ===
     let physics_sandbox = crate::physics::sandbox::PhysicsSandbox {
