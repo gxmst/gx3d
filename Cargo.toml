@@ -1,0 +1,42 @@
+[package]
+name = "gxengine"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# 窗口和事件
+winit = "0.30"
+# 图形 API
+wgpu = "29.0"
+# 数学库
+glam = "0.33"
+# 物理引擎
+rapier3d = "0.33"
+# 图像加载与基础转换
+image = "0.25"
+# glTF 加载
+gltf = "1.4"
+# 高效轻量级 ECS 容器
+hecs = "0.11"
+# 音频系统
+kira = "0.12"
+# 日志与辅助调试
+log = "0.4"
+env_logger = "0.11"
+# 错误处理与抽象
+anyhow = "1.0"
+thiserror = "2.0"
+# 并发 (用于特定并行计算如烘焙)
+rayon = "1.10"
+# 序列化与配置
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# pollster 用于阻塞异步
+pollster = "0.3"
+# bytemuck 用于 GPU 数据传输
+bytemuck = { version = "1.14", features = ["derive"] }
+# 简易 2D 文本渲染，用于设置菜单覆盖层
+wgpu_text = "29.0.3"
+
+[dev-dependencies]
+criterion = "0.5"
