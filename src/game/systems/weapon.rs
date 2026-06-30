@@ -14,8 +14,7 @@ pub fn update_system(world: &mut EngineWorld, resources: &Resources) {
 
     {
         let mut timer = resources
-            .get_mut::<MuzzleFlashTimer>()
-            .expect("MuzzleFlashTimer missing");
+            .expect_mut::<MuzzleFlashTimer>();
         if timer.0 > 0.0 {
             timer.0 -= dt;
         }
@@ -34,43 +33,40 @@ pub fn update_system(world: &mut EngineWorld, resources: &Resources) {
     let fired: bool;
     {
         let input = resources
-            .get::<crate::input::InputState>()
-            .expect("Input missing")
+            .expect::<crate::input::InputState>()
             .clone();
-        let mut weapon = resources.get_mut::<Weapon>().expect("Weapon missing");
+        let mut weapon = resources.expect_mut::<Weapon>();
         fired = weapon.update(dt, &input);
     }
 
     if fired {
         let (recoil, damage) = {
-            let weapon_ref = resources.get::<Weapon>().expect("Weapon missing");
+            let weapon_ref = resources.expect::<Weapon>();
             (weapon_ref.get_recoil(), weapon_ref.damage)
         };
         {
-            let mut player = resources.get_mut::<Player>().expect("Player missing");
+            let mut player = resources.expect_mut::<Player>();
             player.camera_controller.apply_recoil(recoil);
         }
         {
             let mut weapon_model = resources
-                .get_mut::<WeaponModel>()
-                .expect("WeaponModel missing");
+                .expect_mut::<WeaponModel>();
             weapon_model.apply_recoil(Vec3::new(0.0, 0.005, -0.02));
         }
         {
             let mut timer = resources
-                .get_mut::<MuzzleFlashTimer>()
-                .expect("MuzzleFlashTimer missing");
+                .expect_mut::<MuzzleFlashTimer>();
             timer.0 = 0.06;
         }
 
         let (camera_pos, camera_forward) = {
-            let camera = resources.get::<Camera>().expect("Camera missing");
+            let camera = resources.expect::<Camera>();
             (camera.position, camera.forward())
         };
         {
             let ray = Ray::new(camera_pos, camera_forward, 100.0);
             let hit = {
-                let physics = resources.get::<PhysicsWorld>().expect("Physics missing");
+                let physics = resources.expect::<PhysicsWorld>();
                 physics.cast_ray(&ray)
             };
             if let Some(hit) = hit {
@@ -106,8 +102,7 @@ pub fn update_system(world: &mut EngineWorld, resources: &Resources) {
 
 fn update_weapon_model(resources: &Resources, dt: f32) {
     let mut weapon_model = resources
-        .get_mut::<WeaponModel>()
-        .expect("WeaponModel missing");
+        .expect_mut::<WeaponModel>();
     weapon_model.update(dt);
 }
 
@@ -126,8 +121,7 @@ fn update_timed_effects(world: &mut EngineWorld, dt: f32) {
 
 fn spawn_hit_feedback(world: &mut EngineWorld, resources: &Resources, point: Vec3, normal: Vec3) {
     let assets = resources
-        .get::<WeaponFeedbackAssets>()
-        .expect("WeaponFeedbackAssets missing");
+        .expect::<WeaponFeedbackAssets>();
     let normal = normal.normalize_or_zero();
     let rotation = Quat::from_rotation_arc(Vec3::Y, normal);
 

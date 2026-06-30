@@ -17,17 +17,15 @@ struct DrawItem {
 }
 
 pub fn system(world: &mut EngineWorld, resources: &Resources) {
-    let renderer = resources.get::<Renderer>().expect("Renderer missing");
+    let renderer = resources.expect::<Renderer>();
     let asset_manager = resources
-        .get::<AssetManager>()
-        .expect("AssetManager missing");
-    let camera = resources.get::<Camera>().expect("Camera missing");
-    let time = resources.get::<Time>().expect("Time missing");
-    let scene_lights = resources.get::<SceneLights>().expect("SceneLights missing");
-    let weapon_model = resources.get::<WeaponModel>().expect("WeaponModel missing");
+        .expect::<AssetManager>();
+    let camera = resources.expect::<Camera>();
+    let time = resources.expect::<Time>();
+    let scene_lights = resources.expect::<SceneLights>();
+    let weapon_model = resources.expect::<WeaponModel>();
     let weapon = resources
-        .get::<crate::game::Weapon>()
-        .expect("Weapon missing");
+        .expect::<crate::game::Weapon>();
     let menu_open = resources
         .get::<MenuState>()
         .map(|menu| menu.0.open)

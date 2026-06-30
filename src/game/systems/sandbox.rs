@@ -25,7 +25,7 @@ pub fn system(world: &mut EngineWorld, resources: &Resources) {
         throw_or_push,
         scroll_delta,
     ) = {
-        let input = resources.get::<InputState>().expect("Input missing");
+        let input = resources.expect::<InputState>();
         (
             input.is_key_just_pressed(KeyCode::KeyG),
             input.is_key_just_pressed(KeyCode::KeyB),
@@ -38,7 +38,7 @@ pub fn system(world: &mut EngineWorld, resources: &Resources) {
         )
     };
     let (camera_pos, camera_forward) = {
-        let camera = resources.get::<Camera>().expect("Camera missing");
+        let camera = resources.expect::<Camera>();
         (camera.position, camera.forward())
     };
 
@@ -49,8 +49,7 @@ pub fn system(world: &mut EngineWorld, resources: &Resources) {
 
     {
         let mut physics = resources
-            .get_mut::<PhysicsWorld>()
-            .expect("Physics missing");
+            .expect_mut::<PhysicsWorld>();
 
         if spawn_box {
             let transform =

@@ -28,14 +28,13 @@ pub fn input_system(_world: &mut EngineWorld, resources: &Resources) {
         .unwrap_or(0.0);
 
     let (forward, right) = {
-        let camera = resources.get::<Camera>().expect("Camera missing");
+        let camera = resources.expect::<Camera>();
         (camera.forward(), camera.right())
     };
 
     let (mouse_delta, wants_forward, wants_back, wants_right, wants_left, wants_sprint, wants_jump) = {
         let input = resources
-            .get::<crate::input::InputState>()
-            .expect("Input missing");
+            .expect::<crate::input::InputState>();
         (
             input.mouse_delta,
             input.is_key_pressed(KeyCode::KeyW),
@@ -50,7 +49,7 @@ pub fn input_system(_world: &mut EngineWorld, resources: &Resources) {
     {
         let mut player = resources.remove::<Player>().expect("Player missing");
         {
-            let mut camera = resources.get_mut::<Camera>().expect("Camera missing");
+            let mut camera = resources.expect_mut::<Camera>();
             player.camera_controller.update_camera_rotation(
                 &mut camera,
                 &crate::input::InputState {
@@ -86,13 +85,12 @@ pub fn input_system(_world: &mut EngineWorld, resources: &Resources) {
     let desired_velocity = move_dir * speed;
 
     let player_body = {
-        let body = resources.get::<PlayerBody>().expect("PlayerBody missing");
+        let body = resources.expect::<PlayerBody>();
         body.0
     };
     {
         let mut physics = resources
-            .get_mut::<PhysicsWorld>()
-            .expect("Physics missing");
+            .expect_mut::<PhysicsWorld>();
         physics.set_body_horizontal_velocity(player_body, desired_velocity);
 
         if wants_jump {
@@ -106,13 +104,13 @@ pub fn input_system(_world: &mut EngineWorld, resources: &Resources) {
 }
 
 pub fn sync_system(_world: &mut EngineWorld, resources: &Resources) {
-    let player_body = resources.get::<PlayerBody>().expect("PlayerBody missing").0;
+    let player_body = resources.expect::<PlayerBody>().0;
 
     if let Some(pos) = resources
         .get_mut::<PhysicsWorld>()
         .and_then(|p| p.get_body_position(player_body))
     {
-        let mut camera = resources.get_mut::<Camera>().expect("Camera missing");
+        let mut camera = resources.expect_mut::<Camera>();
         camera.position = pos + Vec3::new(0.0, 0.8, 0.0);
     }
 }

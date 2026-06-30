@@ -130,8 +130,7 @@ impl App {
                 if mouse_locked && !menu_open && focused {
                     let mut input = self
                         .resources
-                        .get_mut::<crate::input::InputState>()
-                        .expect("InputState missing");
+                        .expect_mut::<crate::input::InputState>();
                     input.process_mouse_motion(glam::Vec2::new(delta.0 as f32, delta.1 as f32));
                 }
             }
@@ -152,8 +151,7 @@ impl App {
                 WindowEvent::KeyboardInput { event, .. } => {
                     let mut input = self
                         .resources
-                        .get_mut::<crate::input::InputState>()
-                        .expect("InputState missing");
+                        .expect_mut::<crate::input::InputState>();
                     if let PhysicalKey::Code(keycode) = event.physical_key {
                         input.process_key(keycode, event.state);
                         if keycode == winit::keyboard::KeyCode::Escape
@@ -163,15 +161,13 @@ impl App {
                             let menu_open = {
                                 let mut menu = self
                                     .resources
-                                    .get_mut::<crate::game::systems::MenuState>()
-                                    .expect("MenuState missing");
+                                    .expect_mut::<crate::game::systems::MenuState>();
                                 menu.0.open = !menu.0.open;
                                 menu.0.open
                             };
                             let mut mouse_locked = self
                                 .resources
-                                .get_mut::<crate::game::systems::MouseLocked>()
-                                .expect("MouseLocked missing");
+                                .expect_mut::<crate::game::systems::MouseLocked>();
                             mouse_locked.0 = !menu_open;
                             let locked = mouse_locked.0;
                             apply_cursor_lock(&self.window, locked);
@@ -204,8 +200,7 @@ impl App {
                 WindowEvent::CursorMoved { position, .. } => {
                     let mut input = self
                         .resources
-                        .get_mut::<crate::input::InputState>()
-                        .expect("InputState missing");
+                        .expect_mut::<crate::input::InputState>();
                     input.process_cursor_position(glam::Vec2::new(
                         position.x as f32,
                         position.y as f32,
@@ -214,8 +209,7 @@ impl App {
                 WindowEvent::MouseInput { state, button, .. } => {
                     let mut input = self
                         .resources
-                        .get_mut::<crate::input::InputState>()
-                        .expect("InputState missing");
+                        .expect_mut::<crate::input::InputState>();
                     input.process_mouse_button(*button, *state);
                     if *state == ElementState::Pressed {
                         drop(input);
@@ -237,8 +231,7 @@ impl App {
                 WindowEvent::MouseWheel { delta, .. } => {
                     let mut input = self
                         .resources
-                        .get_mut::<crate::input::InputState>()
-                        .expect("InputState missing");
+                        .expect_mut::<crate::input::InputState>();
                     let scroll = match delta {
                         MouseScrollDelta::LineDelta(_, y) => *y,
                         MouseScrollDelta::PixelDelta(pos) => pos.y as f32,

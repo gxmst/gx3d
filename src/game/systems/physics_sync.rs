@@ -3,8 +3,7 @@ use crate::physics::{PhysicsBody, PhysicsWorld};
 
 pub fn step_physics(world: &mut EngineWorld, resources: &Resources) {
     let mut physics = resources
-        .get_mut::<PhysicsWorld>()
-        .expect("Physics missing");
+        .expect_mut::<PhysicsWorld>();
 
     sync_to_physics(world, &mut physics);
 

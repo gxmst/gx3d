@@ -18,11 +18,11 @@ pub fn register(schedule: &mut Schedule) {
 fn setup_scene(world: &mut EngineWorld, resources: &Resources) {
     // === Camera & player tuning ===
     {
-        let mut camera = resources.get_mut::<Camera>().expect("Camera missing");
+        let mut camera = resources.expect_mut::<Camera>();
         camera.position = Vec3::new(0.0, 2.0, 5.0);
     }
     {
-        let mut player = resources.get_mut::<Player>().expect("Player missing");
+        let mut player = resources.expect_mut::<Player>();
         player.camera_controller.move_speed = 8.0;
         player.camera_controller.mouse_sensitivity = 0.002;
         player.height = 1.6;
@@ -50,7 +50,7 @@ fn setup_scene(world: &mut EngineWorld, resources: &Resources) {
 
     // === Player physics body ===
     let player_rb = {
-        let camera = resources.get::<Camera>().expect("Camera missing");
+        let camera = resources.expect::<Camera>();
         let collider = crate::physics::PhysicsShape::Capsule {
             radius: 0.3,
             half_height: 0.5,
@@ -339,7 +339,7 @@ fn setup_scene(world: &mut EngineWorld, resources: &Resources) {
     // === Upload textures, create GPU buffers, and cache material bind groups ===
     let texture_views = {
         let mut texture_views = HashMap::new();
-        let mut renderer = resources.get_mut::<Renderer>().expect("Renderer missing");
+        let mut renderer = resources.expect_mut::<Renderer>();
         for (id, texture) in asset_manager.textures.get_all() {
             let (_, view) = renderer.upload_texture(texture);
             texture_views.insert(*id, view);

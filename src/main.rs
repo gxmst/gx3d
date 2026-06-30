@@ -13,36 +13,60 @@ const MAX_FRAME_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / 144);
 fn main() {
     env_logger::init();
 
-    let event_loop = EventLoop::new().unwrap();
-    let window = event_loop
-        .create_window(
-            Window::default_attributes()
-                .with_title("GxEngine - FPS Sandbox")
-                .with_inner_size(DEFAULT_WINDOW_SIZE),
-        )
-        .unwrap();
+    let event_loop = match EventLoop::new() {
+        Ok(event_loop) => event_loop,
+        Err(e) => {
+            log::error!("Failed to create the event loop: {e}");
+            eprintln!("GxEngine could not start: unable to create a window event loop ({e}).");
+            return;
+        }
+    };
+
+    let window = match event_loop.create_window(
+        Window::default_attributes()
+            .with_title("GxEngine - FPS Sandbox")
+            .with_inner_size(DEFAULT_WINDOW_SIZE),
+    ) {
+        Ok(window) => window,
+        Err(e) => {
+            log::error!("Failed to create the window: {e}");
+            eprintln!("GxEngine could not start: unable to open a window ({e}).");
+            return;
+        }
+    };
     center_window(&window, DEFAULT_WINDOW_SIZE);
     let window = Arc::new(window);
 
-    let mut app = pollster::block_on(gxengine::core::App::new(Arc::clone(&window)))
-        .expect("Failed to create app");
+    let mut app = match pollster::block_on(gxengine::core::App::new(Arc::clone(&window))) {
+        Ok(app) => app,
+        Err(e) => {
+            log::error!("Failed to initialize the engine: {e}");
+            eprintln!(
+                "GxEngine could not start: graphics initialization failed ({e}).\n\
+                 Make sure your system has a GPU with up-to-date drivers that supports Vulkan, \
+                 DirectX 12, or Metal."
+            );
+            return;
+        }
+    };
     let mut next_frame = Instant::now();
 
-    event_loop
-        .run(move |event, active_event_loop| {
-            active_event_loop.set_control_flow(ControlFlow::Poll);
-            app.handle_event(&event, active_event_loop);
-            if let Event::AboutToWait = event {
-                let now = Instant::now();
-                if now < next_frame {
-                    std::thread::sleep(next_frame - now);
-                }
-                next_frame = Instant::now() + MAX_FRAME_INTERVAL;
-                app.update();
-                app.render();
+    let run_result = event_loop.run(move |event, active_event_loop| {
+        active_event_loop.set_control_flow(ControlFlow::Poll);
+        app.handle_event(&event, active_event_loop);
+        if let Event::AboutToWait = event {
+            let now = Instant::now();
+            if now < next_frame {
+                std::thread::sleep(next_frame - now);
             }
-        })
-        .unwrap();
+            next_frame = Instant::now() + MAX_FRAME_INTERVAL;
+            app.update();
+            app.render();
+        }
+    });
+    if let Err(e) = run_result {
+        log::error!("Event loop exited with an error: {e}");
+    }
 }
 
 fn center_window(window: &Window, size: PhysicalSize<u32>) {

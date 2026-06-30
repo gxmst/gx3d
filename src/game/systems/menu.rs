@@ -9,8 +9,7 @@ use super::MenuState;
 pub fn system(_world: &mut EngineWorld, resources: &Resources) {
     let (clicked, cursor) = {
         let input = resources
-            .get::<crate::input::InputState>()
-            .expect("Input missing");
+            .expect::<crate::input::InputState>();
         (
             input.is_mouse_just_pressed(MouseButton::Left),
             input.mouse_position,
@@ -22,7 +21,7 @@ pub fn system(_world: &mut EngineWorld, resources: &Resources) {
     }
 
     let (width, height) = {
-        let renderer = resources.get::<Renderer>().expect("Renderer missing");
+        let renderer = resources.expect::<Renderer>();
         (
             renderer.surface_config.width as f32,
             renderer.surface_config.height as f32,
@@ -30,7 +29,7 @@ pub fn system(_world: &mut EngineWorld, resources: &Resources) {
     };
 
     let action = {
-        let menu = resources.get::<MenuState>().expect("MenuState missing");
+        let menu = resources.expect::<MenuState>();
         if !menu.0.open {
             return;
         }
@@ -41,16 +40,16 @@ pub fn system(_world: &mut EngineWorld, resources: &Resources) {
         Some(MenuAction::SetResolution(index)) => {
             let option = RESOLUTION_OPTIONS[index];
             {
-                let mut menu = resources.get_mut::<MenuState>().expect("MenuState missing");
+                let mut menu = resources.expect_mut::<MenuState>();
                 menu.0.selected_resolution = index;
             }
-            let renderer = resources.get::<Renderer>().expect("Renderer missing");
+            let renderer = resources.expect::<Renderer>();
             let requested = PhysicalSize::new(option.width, option.height);
             let _ = renderer.window.request_inner_size(requested);
             center_window(&renderer.window, requested);
         }
         Some(MenuAction::SetLanguage(Language::SimplifiedChinese)) => {
-            let mut menu = resources.get_mut::<MenuState>().expect("MenuState missing");
+            let mut menu = resources.expect_mut::<MenuState>();
             menu.0.language = Language::SimplifiedChinese;
         }
         None => {}
