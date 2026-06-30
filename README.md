@@ -11,6 +11,7 @@ GxEngine 是一个学习型 Rust 3D 引擎 / FPS sandbox。当前目标不是做
 - 程序化几何体和基础 glTF/GLB 静态网格加载
 - FPS 摄像机、玩家移动、射击射线、后坐力、简单敌人 AI
 - 物理 sandbox：质量差异、摩擦/弹性材质、坡道、冰面、滑块、可击倒靶、生成/拾取/投掷动态物体
+- 数据驱动场景：关卡几何体、材质、灯光、敌人布局从 `assets/scenes/sandbox.json` 加载，改场景不用重新编译
 
 ## 运行
 
@@ -53,6 +54,20 @@ cargo run
 鼠标左键射击会在命中位置留下短暂弹孔和闪光，命中动态物体时会附带小幅击退。
 设置菜单打开时会释放鼠标，右侧显示键位提示，左侧可切换窗口分辨率和简体中文语言项。
 
+## 编辑场景
+
+关卡现在是数据驱动的：场景内容（材质、关卡几何体、灯光、敌人布局、玩家出生点）写在 `assets/scenes/sandbox.json` 里，**改这个文件不需要重新编译**。引擎启动时优先读取磁盘上的该文件，读不到或解析失败则回退到嵌入二进制的同一份默认场景，并打日志说明原因——场景写错不会让引擎崩溃。
+
+格式要点（对手写友好）：
+
+- 网格和材质先在 `meshes` / `materials` 里**起名字**，实体再用名字引用。
+- 网格来源是程序化生成器（`cube` / `sphere` / `cylinder` / `plane` / `rifle`），不是外部文件。
+- 旋转用**欧拉角（度）**，不是四元数。
+- 物理表面可填预设字符串（`"default"` / `"ice"` / `"rubber"` / `"metal"`）或裸对象 `{"friction": ..., "restitution": ...}`。
+- `mass` 为 0（或省略）即静态物体；`initial_impulse` 可给出生时一次性冲量。
+
+引擎管线（玩家胶囊、武器、命中反馈材质、GPU 上传、音频）仍在代码里，按名字从场景取所需句柄，因此 `cube` / `sphere` / `rifle` / `box` / `ice` 等名字是引擎约定依赖的。
+
 ## 架构笔记
 
 - `src/core`：ECS 包装、资源容器、时间和调度。
@@ -60,13 +75,17 @@ cargo run
 - `src/physics`：Rapier3D 封装、碰撞形状、射线和物理 sandbox。
 - `src/asset`：网格、材质、纹理、程序化资源和 glTF 加载。
 - `src/game`：当前 FPS sandbox 的玩家、武器、敌人和系统注册。
+- `src/game/scene`：数据驱动场景的数据结构（`mod.rs`）和实例化逻辑（`spawn.rs`）。
+- `assets/scenes`：JSON 关卡文件。`sandbox.json` 是启动默认场景，同时被嵌入二进制做兜底。
 - `assets/shaders`：WGSL shader。主 PBR pass 输出线性 HDR，tone mapping 在后处理完成。
 
 ## 下一步路线
 
-1. 稳住输入、物理同步、渲染后处理这些底座。
-2. 把测试场景做成明确的物理 playground：更多可拾取物、斜坡、弹射、不同质量。
-3. 把 glTF loader 从“能读静态 mesh”推进到“尊重 node transform 和 primitive material”。
-4. 再考虑动画、骨骼、IK、编辑器或资源 cooking。
+1. ~~稳住输入、物理同步、渲染后处理这些底座。~~（已完成：资源访问带定位 panic、启动失败优雅化）
+2. ~~把场景从硬编码搬进数据文件，关卡只改 JSON 不动代码。~~（已完成：见上节）
+3. 走极简 / 风格化美术方向：用纯色材质 + 现有打光/后处理（IBL、SSAO、Bloom、ACES）撑起画面，不依赖外部美术资源。
+4. 多场景支持：从命令行或菜单切换 `assets/scenes/*.json`，做几张能玩的极简关卡。
+5. 把 glTF loader 从“能读静态 mesh”推进到“尊重 node transform 和 primitive material”，让场景能引用导入模型。
+6. 再考虑玩法层（关卡目标、敌人波次、存档）和动画、骨骼、IK、编辑器或资源 cooking。
 
 设计野心放在 `docs/DESIGN.md`，实际进度以 README 和测试为准。
