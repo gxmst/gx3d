@@ -1,4 +1,4 @@
-use crate::game::{PauseMenu, PauseMenuLayout, UiRect, RESOLUTION_OPTIONS};
+use crate::game::{InteractionFocus, PauseMenu, PauseMenuLayout, UiRect, RESOLUTION_OPTIONS};
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 use wgpu_text::{
@@ -113,6 +113,7 @@ impl OverlayRenderer {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_pause_menu(
         &mut self,
         device: &wgpu::Device,
@@ -182,6 +183,24 @@ impl OverlayRenderer {
             layout.language_button,
             [0.35, 0.78, 0.82, 0.95],
         );
+        add_rect(
+            &mut vertices,
+            width,
+            height,
+            layout.god_mode_button,
+            if menu.god_mode_enabled {
+                [0.12, 0.42, 0.28, 0.9]
+            } else {
+                [0.30, 0.18, 0.18, 0.9]
+            },
+        );
+        add_outline(
+            &mut vertices,
+            width,
+            height,
+            layout.god_mode_button,
+            [0.42, 0.82, 0.58, 0.95],
+        );
 
         self.update_rects(device, queue, &vertices);
         {
@@ -231,6 +250,170 @@ impl OverlayRenderer {
                 multiview_mask: None,
             });
             brush.draw(&mut pass);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_hud(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        focus: &InteractionFocus,
+        aiming: bool,
+        width: u32,
+        height: u32,
+    ) {
+        let (width, height) = (width as f32, height as f32);
+        let center_x = width * 0.5;
+        let center_y = height * 0.5;
+        let gap = if aiming { 2.0 } else { 6.0 };
+        let length = if aiming { 5.0 } else { 8.0 };
+        let color = if focus.entity.is_some() {
+            [1.0, 0.78, 0.28, 0.96]
+        } else {
+            [0.92, 0.96, 1.0, 0.88]
+        };
+        let mut vertices = Vec::new();
+        add_rect(
+            &mut vertices,
+            width,
+            height,
+            UiRect {
+                x: center_x - gap - length,
+                y: center_y - 1.0,
+                w: length,
+                h: 2.0,
+            },
+            color,
+        );
+        add_rect(
+            &mut vertices,
+            width,
+            height,
+            UiRect {
+                x: center_x + gap,
+                y: center_y - 1.0,
+                w: length,
+                h: 2.0,
+            },
+            color,
+        );
+        add_rect(
+            &mut vertices,
+            width,
+            height,
+            UiRect {
+                x: center_x - 1.0,
+                y: center_y - gap - length,
+                w: 2.0,
+                h: length,
+            },
+            color,
+        );
+        add_rect(
+            &mut vertices,
+            width,
+            height,
+            UiRect {
+                x: center_x - 1.0,
+                y: center_y + gap,
+                w: 2.0,
+                h: length,
+            },
+            color,
+        );
+        add_rect(
+            &mut vertices,
+            width,
+            height,
+            UiRect {
+                x: center_x - 1.5,
+                y: center_y - 1.5,
+                w: 3.0,
+                h: 3.0,
+            },
+            color,
+        );
+
+        if !focus.prompt.is_empty() {
+            let panel = UiRect {
+                x: center_x - 250.0,
+                y: center_y + 48.0,
+                w: 500.0,
+                h: 62.0,
+            };
+            add_rect(
+                &mut vertices,
+                width,
+                height,
+                panel,
+                [0.025, 0.03, 0.035, 0.78],
+            );
+            add_outline(&mut vertices, width, height, panel, [0.95, 0.62, 0.20, 0.8]);
+        }
+        self.update_rects(device, queue, &vertices);
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("HUD Rect Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.rect_pipeline);
+            pass.set_vertex_buffer(0, self.rect_vertex_buffer.slice(..));
+            pass.draw(0..self.rect_vertex_count, 0..1);
+        }
+
+        if !focus.prompt.is_empty() {
+            if let Some(brush) = &mut self.text_brush {
+                let sections = [
+                    section(
+                        center_x - 226.0,
+                        center_y + 59.0,
+                        &focus.title,
+                        19.0,
+                        [1.0, 0.82, 0.46, 1.0],
+                    ),
+                    section(
+                        center_x - 226.0,
+                        center_y + 84.0,
+                        &focus.prompt,
+                        16.0,
+                        [0.92, 0.95, 0.98, 1.0],
+                    ),
+                ];
+                if brush.queue(device, queue, sections.iter()).is_ok() {
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("HUD Text Pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: target,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    brush.draw(&mut pass);
+                }
+            }
         }
     }
 
@@ -406,6 +589,24 @@ fn build_text_sections(menu: &PauseMenu, layout: &PauseMenuLayout) -> Vec<OwnedS
     ));
     sections.push(section(
         layout.panel.x + 42.0,
+        layout.god_mode_button.y - 34.0,
+        "观察模式",
+        22.0,
+        accent,
+    ));
+    sections.push(section(
+        layout.god_mode_button.x + 22.0,
+        layout.god_mode_button.y + 11.0,
+        if menu.god_mode_enabled {
+            "上帝模式：开启"
+        } else {
+            "上帝模式：关闭"
+        },
+        19.0,
+        text,
+    ));
+    sections.push(section(
+        layout.panel.x + 42.0,
         layout.panel.y + 96.0,
         "按 ESC 返回游戏",
         20.0,
@@ -466,7 +667,7 @@ fn build_text_sections(menu: &PauseMenu, layout: &PauseMenuLayout) -> Vec<OwnedS
     sections.push(section(
         layout.key_panel.x + 42.0,
         layout.key_panel.y + 98.0,
-        "WASD  移动\nShift  奔跑\nSpace  跳跃\n鼠标左键  射击\nE / 鼠标中键  抓取或放下\n鼠标滚轮  调整持物距离\nT  投掷持物 / 推开准星物体\nX  冻结 / 解冻准星物体\nG  生成箱子    B  生成弹力球    H  生成重箱\nF  按住显示键位提示\nEsc  打开或关闭设置",
+        "WASD  移动\nShift  奔跑 / 加速飞行\nSpace  跳跃 / 上升    Ctrl  下降\nV  FPS / 上帝模式\nP  暂停    .  单步    [ / ]  调整倍速\nF3  碰撞线框    F4  速度向量    F5  接触点\n鼠标左键  射击    鼠标右键  瞄准\nE  开门 / 抓取    鼠标中键  抓取或放下\n鼠标滚轮  调整持物距离\nT  投掷持物 / 推开准星物体\nX  冻结 / 解冻准星物体\nDelete  删除准星物体\nG  生成箱子    B  生成弹力球    H  生成重箱\nF  按住显示键位提示\nEsc  打开或关闭设置",
         21.0,
         text,
     ));

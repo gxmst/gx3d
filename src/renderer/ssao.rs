@@ -66,9 +66,10 @@ impl SsaoPass {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        // Half-screen resolution SSAO target for performance.
-        let ssao_width = (width / 2).max(1);
-        let ssao_height = (height / 2).max(1);
+        // Full-resolution SSAO avoids soft halos and edge swimming at 1440p
+        // and ultrawide resolutions. The blur pass still suppresses noise.
+        let ssao_width = width.max(1);
+        let ssao_height = height.max(1);
 
         let (kernel, noise) = generate_kernel_and_noise();
 
@@ -329,8 +330,8 @@ impl SsaoPass {
     }
 
     pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
-        let ssao_width = (width / 2).max(1);
-        let ssao_height = (height / 2).max(1);
+        let ssao_width = width.max(1);
+        let ssao_height = height.max(1);
 
         let create_r8_texture = |label| {
             device.create_texture(&wgpu::TextureDescriptor {

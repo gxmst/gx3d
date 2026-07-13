@@ -15,6 +15,7 @@ pub struct PhysicsSandbox {
     pub heavy_material: crate::asset::Handle<crate::asset::Material>,
 }
 
+#[allow(clippy::too_many_arguments)]
 impl PhysicsSandbox {
     pub fn spawn_prop(
         &mut self,
@@ -117,7 +118,25 @@ impl PhysicsSandbox {
         physics: &PhysicsWorld,
         ray: &Ray,
     ) -> Option<RigidBodyHandle> {
-        physics.cast_ray(ray).and_then(|hit: RaycastHit| {
+        self.body_from_hit(world, physics.cast_ray(ray))
+    }
+
+    pub fn ray_pick_excluding(
+        &self,
+        world: &EngineWorld,
+        physics: &PhysicsWorld,
+        ray: &Ray,
+        excluded: RigidBodyHandle,
+    ) -> Option<RigidBodyHandle> {
+        self.body_from_hit(world, physics.cast_ray_excluding_body(ray, excluded))
+    }
+
+    fn body_from_hit(
+        &self,
+        world: &EngineWorld,
+        hit: Option<RaycastHit>,
+    ) -> Option<RigidBodyHandle> {
+        hit.and_then(|hit: RaycastHit| {
             let entity = hit.entity?;
             world
                 .ecs
@@ -129,7 +148,7 @@ impl PhysicsSandbox {
 
     pub fn hold_body(&mut self, body: RigidBodyHandle, hold_distance: f32) {
         self.held_body = Some(body);
-        self.hold_distance = hold_distance;
+        self.hold_distance = hold_distance.clamp(2.2, 10.0);
     }
 
     pub fn drop_body(&mut self) {
@@ -138,7 +157,7 @@ impl PhysicsSandbox {
 
     pub fn adjust_hold_distance(&mut self, scroll_delta: f32) {
         if self.held_body.is_some() {
-            self.hold_distance = (self.hold_distance + scroll_delta * 0.35).clamp(1.5, 12.0);
+            self.hold_distance = (self.hold_distance + scroll_delta * 0.35).clamp(2.2, 10.0);
         }
     }
 
@@ -166,8 +185,16 @@ impl PhysicsSandbox {
             if let Some(current) = physics.get_body_position(body) {
                 let velocity = physics.get_body_velocity(body).unwrap_or(Vec3::ZERO);
                 let delta = target - current;
-                // Spring + damping to hold the body at the target point.
-                physics.apply_force(body, delta * 80.0 - velocity * 8.0);
+                // A bounded velocity servo is stable at any render framerate.
+                // The previous force spring accumulated multiple times before
+                // each 60 Hz physics tick and launched lightweight balls.
+                let desired = (delta * 7.0).clamp_length_max(11.0);
+                let next_velocity = velocity.lerp(desired, 0.32);
+                if let Some(rb) = physics.rigid_body_set.get_mut(body) {
+                    rb.wake_up(true);
+                    rb.set_linvel(next_velocity, true);
+                    rb.set_angvel(rb.angvel() * 0.72, true);
+                }
             }
         }
     }

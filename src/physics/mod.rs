@@ -110,6 +110,8 @@ impl PhysicsWorld {
         let rigid_body = RigidBodyBuilder::dynamic()
             .translation(vec3_to_rapier(position))
             .additional_mass(mass)
+            .linear_damping(0.16)
+            .angular_damping(0.48)
             .ccd_enabled(true)
             .soft_ccd_prediction(0.25)
             .build();
@@ -167,6 +169,26 @@ impl PhysicsWorld {
         }
     }
 
+    /// Make manually moved bodies immediately visible to raycasts, even when
+    /// the simulation is paused and `step` will not run this frame.
+    pub fn refresh_body_colliders(&mut self, bodies: &[RigidBodyHandle]) {
+        let collider_handles: Vec<_> = bodies
+            .iter()
+            .filter_map(|handle| self.rigid_body_set.get(*handle))
+            .flat_map(|body| body.colliders().iter().copied())
+            .collect();
+        self.rigid_body_set
+            .propagate_modified_body_positions_to_colliders(&mut self.collider_set);
+        for handle in collider_handles {
+            if let Some(collider) = self.collider_set.get(handle) {
+                let aabb = collider
+                    .compute_broad_phase_aabb(&self.integration_parameters, &self.rigid_body_set);
+                self.broad_phase
+                    .set_aabb(&self.integration_parameters, handle, aabb);
+            }
+        }
+    }
+
     pub fn set_body_velocity(&mut self, handle: RigidBodyHandle, velocity: Vec3) {
         if let Some(rb) = self.rigid_body_set.get_mut(handle) {
             rb.set_linvel(vec3_to_rapier(velocity), true);
@@ -193,6 +215,19 @@ impl PhysicsWorld {
         if let Some(rb) = self.rigid_body_set.get_mut(handle) {
             rb.apply_impulse(vec3_to_rapier(impulse), true);
         }
+    }
+
+    pub fn apply_impulse_at_point(&mut self, handle: RigidBodyHandle, impulse: Vec3, point: Vec3) {
+        if let Some(rb) = self.rigid_body_set.get_mut(handle) {
+            rb.wake_up(true);
+            rb.apply_impulse_at_point(vec3_to_rapier(impulse), vec3_to_rapier(point), true);
+        }
+    }
+
+    pub fn collider_body(&self, collider: ColliderHandle) -> Option<RigidBodyHandle> {
+        self.collider_set
+            .get(collider)
+            .and_then(|collider| collider.parent())
     }
 
     /// Fully remove a rigid body, its attached colliders, and any

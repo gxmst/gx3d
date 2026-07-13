@@ -138,71 +138,78 @@ impl ProceduralGenerator {
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
 
-        // Top cap
+        // Caps use their own vertices so their normals stay vertical.
+        let top_center = vertices.len() as u32;
         vertices.push(Vertex::new(
             Vec3::new(0.0, 0.5, 0.0),
             Vec3::Y,
-            Vec2::new(0.5, 0.5),
+            Vec2::splat(0.5),
         ));
         for i in 0..=segments {
-            let angle = 2.0 * std::f32::consts::PI * i as f32 / segments as f32;
-            let x = angle.cos() * 0.5;
-            let z = angle.sin() * 0.5;
+            let a = std::f32::consts::TAU * i as f32 / segments as f32;
             vertices.push(Vertex::new(
-                Vec3::new(x, 0.5, z),
+                Vec3::new(a.cos() * 0.5, 0.5, a.sin() * 0.5),
                 Vec3::Y,
-                Vec2::new(angle.cos() * 0.5 + 0.5, angle.sin() * 0.5 + 0.5),
+                Vec2::new(a.cos() * 0.5 + 0.5, a.sin() * 0.5 + 0.5),
             ));
         }
+        for i in 0..segments {
+            indices.extend_from_slice(&[top_center, top_center + i + 2, top_center + i + 1]);
+        }
 
-        // Bottom cap
         let bottom_center = vertices.len() as u32;
         vertices.push(Vertex::new(
             Vec3::new(0.0, -0.5, 0.0),
             -Vec3::Y,
-            Vec2::new(0.5, 0.5),
+            Vec2::splat(0.5),
         ));
         for i in 0..=segments {
-            let angle = 2.0 * std::f32::consts::PI * i as f32 / segments as f32;
-            let x = angle.cos() * 0.5;
-            let z = angle.sin() * 0.5;
+            let a = std::f32::consts::TAU * i as f32 / segments as f32;
             vertices.push(Vertex::new(
-                Vec3::new(x, -0.5, z),
+                Vec3::new(a.cos() * 0.5, -0.5, a.sin() * 0.5),
                 -Vec3::Y,
-                Vec2::new(angle.cos() * 0.5 + 0.5, angle.sin() * 0.5 + 0.5),
+                Vec2::new(a.cos() * 0.5 + 0.5, a.sin() * 0.5 + 0.5),
             ));
         }
-
-        // Top cap indices
         for i in 0..segments {
-            indices.push(0);
-            indices.push(1 + i);
-            indices.push(1 + i + 1);
+            indices.extend_from_slice(&[
+                bottom_center,
+                bottom_center + i + 1,
+                bottom_center + i + 2,
+            ]);
         }
 
-        // Bottom cap indices
-        for i in 0..segments {
-            indices.push(bottom_center);
-            indices.push(bottom_center + 1 + i + 1);
-            indices.push(bottom_center + 1 + i);
+        // Sides need radial normals and independent seam vertices. The old
+        // mesh reused cap normals here, causing black/transparent-looking oil barrels.
+        let side_start = vertices.len() as u32;
+        for i in 0..=segments {
+            let a = std::f32::consts::TAU * i as f32 / segments as f32;
+            let normal = Vec3::new(a.cos(), 0.0, a.sin());
+            let u = i as f32 / segments as f32;
+            vertices.push(Vertex::new(
+                Vec3::new(normal.x * 0.5, 0.5, normal.z * 0.5),
+                normal,
+                Vec2::new(u, 0.0),
+            ));
+            vertices.push(Vertex::new(
+                Vec3::new(normal.x * 0.5, -0.5, normal.z * 0.5),
+                normal,
+                Vec2::new(u, 1.0),
+            ));
         }
-
-        // Side indices
-        let side_start = 1;
-        let side_start_bottom = bottom_center + 1;
         for i in 0..segments {
-            let tl = side_start + i;
-            let tr = tl + 1;
-            let bl = side_start_bottom + i;
-            let br = bl + 1;
-
-            indices.push(tl);
-            indices.push(bl);
-            indices.push(tr);
-
-            indices.push(tr);
-            indices.push(bl);
-            indices.push(br);
+            let top_left = side_start + i * 2;
+            let bottom_left = top_left + 1;
+            let top_right = top_left + 2;
+            let bottom_right = top_left + 3;
+            indices.extend_from_slice(&[
+                top_left,
+                top_right,
+                bottom_left,
+                top_right,
+                bottom_right,
+                bottom_left,
+            ]);
         }
 
         Mesh::new("Cylinder", vertices, indices)
@@ -260,8 +267,186 @@ impl ProceduralGenerator {
             Vec3::new(0.0, 0.12, -0.62),
             Vec3::new(0.035, 0.08, 0.025),
         );
+        // Front sight, rear sight and top rail silhouette.
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, 0.155, -0.67),
+            Vec3::new(0.018, 0.045, 0.018),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, 0.142, 0.05),
+            Vec3::new(0.055, 0.035, 0.035),
+        );
+        for z in [-0.48, -0.36, -0.24, -0.12, 0.0] {
+            add_box(
+                &mut vertices,
+                &mut indices,
+                Vec3::new(0.0, 0.128, z),
+                Vec3::new(0.12, 0.012, 0.025),
+            );
+        }
+        // Handguard side ribs and stock details break up the slab-like form.
+        for z in [-0.52, -0.40, -0.28] {
+            add_box(
+                &mut vertices,
+                &mut indices,
+                Vec3::new(0.0, 0.0, z),
+                Vec3::new(0.07, 0.065, 0.032),
+            );
+        }
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, -0.055, 0.48),
+            Vec3::new(0.11, 0.085, 0.10),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, -0.28, -0.08),
+            Vec3::new(0.065, 0.05, 0.085),
+        );
 
         Mesh::new("Procedural Rifle", vertices, indices)
+    }
+
+    pub fn create_wedge() -> Mesh {
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        let p = [
+            Vec3::new(-0.5, -0.5, -0.5),
+            Vec3::new(0.5, -0.5, -0.5),
+            Vec3::new(-0.5, -0.5, 0.5),
+            Vec3::new(0.5, -0.5, 0.5),
+            Vec3::new(-0.5, 0.5, 0.5),
+            Vec3::new(0.5, 0.5, 0.5),
+        ];
+        let mut face = |points: &[Vec3], normal: Vec3| {
+            let base = vertices.len() as u32;
+            for (index, point) in points.iter().enumerate() {
+                let uv = match index {
+                    0 => Vec2::new(0.0, 1.0),
+                    1 => Vec2::new(1.0, 1.0),
+                    2 => Vec2::new(1.0, 0.0),
+                    _ => Vec2::new(0.0, 0.0),
+                };
+                vertices.push(Vertex::new(*point, normal, uv));
+            }
+            if points.len() == 3 {
+                indices.extend_from_slice(&[base, base + 1, base + 2]);
+            } else {
+                indices.extend_from_slice(&[base, base + 1, base + 2, base + 2, base + 3, base]);
+            }
+        };
+        face(&[p[0], p[1], p[3], p[2]], -Vec3::Y);
+        face(&[p[2], p[3], p[5], p[4]], Vec3::Z);
+        let slope_normal = Vec3::new(0.0, 1.0, -1.0).normalize();
+        face(&[p[0], p[4], p[5], p[1]], slope_normal);
+        face(&[p[0], p[2], p[4]], -Vec3::X);
+        face(&[p[1], p[5], p[3]], Vec3::X);
+        Mesh::new("Wedge", vertices, indices)
+    }
+
+    pub fn create_humanoid() -> Mesh {
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        // Boots and separated legs.
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(-0.20, -0.86, 0.02),
+            Vec3::new(0.14, 0.42, 0.16),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.20, -0.86, 0.02),
+            Vec3::new(0.14, 0.42, 0.16),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(-0.20, -1.25, -0.08),
+            Vec3::new(0.16, 0.10, 0.28),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.20, -1.25, -0.08),
+            Vec3::new(0.16, 0.10, 0.28),
+        );
+        // Pelvis, torso, chest and neck create a readable silhouette.
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, -0.34, 0.0),
+            Vec3::new(0.36, 0.22, 0.22),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, 0.12, 0.0),
+            Vec3::new(0.42, 0.36, 0.24),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, 0.48, 0.0),
+            Vec3::new(0.50, 0.16, 0.27),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, 0.72, 0.0),
+            Vec3::new(0.13, 0.12, 0.13),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, 0.98, 0.0),
+            Vec3::new(0.25, 0.27, 0.24),
+        );
+        // Arms, forearms and hands.
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(-0.58, 0.25, 0.0),
+            Vec3::new(0.13, 0.38, 0.15),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.58, 0.25, 0.0),
+            Vec3::new(0.13, 0.38, 0.15),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(-0.60, -0.18, -0.03),
+            Vec3::new(0.12, 0.28, 0.13),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.60, -0.18, -0.03),
+            Vec3::new(0.12, 0.28, 0.13),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(-0.60, -0.50, -0.08),
+            Vec3::new(0.14, 0.12, 0.16),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.60, -0.50, -0.08),
+            Vec3::new(0.14, 0.12, 0.16),
+        );
+        Mesh::new("Humanoid", vertices, indices)
     }
 
     pub fn create_checkerboard_texture(size: u32, grid_size: u32) -> super::Texture {

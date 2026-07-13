@@ -8,8 +8,8 @@ use glam::Vec3;
 use std::collections::HashMap;
 
 use super::{
-    Enemies, EnemyFlashMaterial, MenuState, MouseLocked, MuzzleFlashTimer, PlayerBody, SceneLights,
-    TextureViews, WeaponFeedbackAssets,
+    Enemies, EnemyFlashMaterial, MenuState, MouseLocked, MuzzleFlashTimer, PhysicsDebugState,
+    PlayerBody, SceneLights, TextureViews, ViewModeState, WeaponFeedbackAssets,
 };
 
 /// The default scene, compiled into the binary as a fallback so the engine can
@@ -18,7 +18,7 @@ const EMBEDDED_SCENE: &str = include_str!("../../../assets/scenes/dust2.json");
 
 /// Path (relative to the working directory) of the scene loaded at startup.
 /// Editing this file lets you change the level without recompiling.
-const SCENE_PATH: &str = "assets/scenes/dust2.json";
+const DEFAULT_SCENE_PATH: &str = "assets/scenes/dust2.json";
 
 pub fn register(schedule: &mut Schedule) {
     schedule.add_system(Stage::Startup, setup_scene);
@@ -28,23 +28,45 @@ pub fn register(schedule: &mut Schedule) {
 /// without recompiling), and fall back to the embedded copy if it is missing
 /// or fails to parse. Either way the engine starts with a valid scene.
 fn load_scene() -> Scene {
-    match std::fs::read_to_string(SCENE_PATH) {
+    let scene_path = requested_scene_path();
+    match std::fs::read_to_string(&scene_path) {
         Ok(text) => match Scene::from_json(&text) {
             Ok(scene) => {
-                log::info!("Loaded scene from {SCENE_PATH}");
+                log::info!("Loaded scene from {}", scene_path.display());
                 return scene;
             }
             Err(e) => log::error!(
-                "Failed to parse {SCENE_PATH}: {e}. Falling back to embedded scene."
+                "Failed to parse {}: {e}. Falling back to embedded scene.",
+                scene_path.display()
             ),
         },
         Err(e) => log::info!(
-            "No scene file at {SCENE_PATH} ({e}). Using embedded scene."
+            "No scene file at {} ({e}). Using embedded scene.",
+            scene_path.display()
         ),
     }
     // The embedded scene is authored alongside the code and is expected to
     // always parse; if it does not, that is a build-time bug worth surfacing.
     Scene::from_json(EMBEDDED_SCENE).expect("embedded scene must parse")
+}
+
+fn requested_scene_path() -> std::path::PathBuf {
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--scene" {
+            if let Some(value) = args.next() {
+                let path = std::path::PathBuf::from(&value);
+                return if path.extension().is_some() || path.components().count() > 1 {
+                    path
+                } else {
+                    std::path::Path::new("assets/scenes")
+                        .join(value)
+                        .with_extension("json")
+                };
+            }
+        }
+    }
+    std::path::PathBuf::from(DEFAULT_SCENE_PATH)
 }
 
 fn setup_scene(world: &mut EngineWorld, resources: &Resources) {
@@ -102,6 +124,9 @@ fn setup_scene(world: &mut EngineWorld, resources: &Resources) {
     resources.insert(MouseLocked(true));
     resources.insert(MenuState::default());
     resources.insert(MuzzleFlashTimer(0.0));
+    resources.insert(ViewModeState::default());
+    resources.insert(PhysicsDebugState::default());
+    resources.insert(crate::game::InteractionFocus::default());
 
     // === Weapon (engine plumbing) ===
     // The rifle mesh comes from the scene; its material is engine-defined.
@@ -116,9 +141,12 @@ fn setup_scene(world: &mut EngineWorld, resources: &Resources) {
     resources.insert(weapon_model);
 
     // === Hit-feedback assets (engine plumbing spawned at runtime) ===
-    let bullet_hole_material = asset_manager
-        .materials
-        .insert(solid_material("Bullet Hole", [0.015, 0.012, 0.01], 0.95, 0.0));
+    let bullet_hole_material = asset_manager.materials.insert(solid_material(
+        "Bullet Impact Mark",
+        [0.018, 0.014, 0.011],
+        0.72,
+        0.18,
+    ));
     let muzzle_flash_material = asset_manager.materials.insert(Material {
         name: "Muzzle Flash".to_string(),
         albedo_factor: [1.0, 0.58, 0.14, 1.0],
@@ -132,8 +160,9 @@ fn setup_scene(world: &mut EngineWorld, resources: &Resources) {
     });
     let cube_mesh = spawned.mesh("cube").unwrap_or_default();
     let sphere_mesh = spawned.mesh("sphere").unwrap_or_default();
+    let cylinder_mesh = spawned.mesh("cylinder").unwrap_or(cube_mesh);
     resources.insert(WeaponFeedbackAssets {
-        bullet_hole_mesh: cube_mesh,
+        bullet_hole_mesh: cylinder_mesh,
         bullet_hole_material,
         impact_mesh: sphere_mesh,
         impact_material: muzzle_flash_material,

@@ -12,7 +12,7 @@ pub struct ResolutionOption {
     pub height: u32,
 }
 
-pub const RESOLUTION_OPTIONS: [ResolutionOption; 4] = [
+pub const RESOLUTION_OPTIONS: [ResolutionOption; 5] = [
     ResolutionOption {
         label: "1280 x 720",
         width: 1280,
@@ -33,6 +33,11 @@ pub const RESOLUTION_OPTIONS: [ResolutionOption; 4] = [
         width: 2560,
         height: 1440,
     },
+    ResolutionOption {
+        label: "3440 x 1440 (21:9)",
+        width: 3440,
+        height: 1440,
+    },
 ];
 
 #[derive(Debug, Clone)]
@@ -40,6 +45,7 @@ pub struct PauseMenu {
     pub open: bool,
     pub language: Language,
     pub selected_resolution: usize,
+    pub god_mode_enabled: bool,
 }
 
 impl PauseMenu {
@@ -48,6 +54,7 @@ impl PauseMenu {
             open: false,
             language: Language::SimplifiedChinese,
             selected_resolution: 2,
+            god_mode_enabled: true,
         }
     }
 
@@ -60,6 +67,9 @@ impl PauseMenu {
         }
         if layout.language_button.contains(cursor) {
             return Some(MenuAction::SetLanguage(Language::SimplifiedChinese));
+        }
+        if layout.god_mode_button.contains(cursor) {
+            return Some(MenuAction::ToggleGodMode);
         }
         None
     }
@@ -75,6 +85,7 @@ impl Default for PauseMenu {
 pub enum MenuAction {
     SetResolution(usize),
     SetLanguage(Language),
+    ToggleGodMode,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -106,6 +117,7 @@ pub struct PauseMenuLayout {
     pub key_panel: UiRect,
     pub resolution_buttons: Vec<ResolutionButton>,
     pub language_button: UiRect,
+    pub god_mode_button: UiRect,
 }
 
 impl PauseMenuLayout {
@@ -136,6 +148,7 @@ impl PauseMenuLayout {
                 index,
             });
         }
+        let resolution_rows = RESOLUTION_OPTIONS.len().div_ceil(2) as f32;
 
         Self {
             panel: UiRect {
@@ -153,7 +166,13 @@ impl PauseMenuLayout {
             resolution_buttons,
             language_button: UiRect {
                 x: start_x,
-                y: start_y + 2.0 * (button_h + 16.0) + 70.0,
+                y: start_y + resolution_rows * (button_h + 16.0) + 38.0,
+                w: button_w,
+                h: button_h,
+            },
+            god_mode_button: UiRect {
+                x: start_x,
+                y: start_y + resolution_rows * (button_h + 16.0) + 118.0,
                 w: button_w,
                 h: button_h,
             },

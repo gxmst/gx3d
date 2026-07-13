@@ -2,12 +2,16 @@ use crate::core::{Schedule, Stage};
 
 pub mod enemy;
 pub mod input;
+pub mod interaction;
 pub mod menu;
+pub mod physics_debug;
 pub mod physics_sync;
 pub mod player;
 pub mod render;
 pub mod sandbox;
 pub mod setup;
+pub mod time_control;
+pub mod view_mode;
 pub mod weapon;
 
 /// Per-frame state: whether the mouse is locked for FPS look.
@@ -33,6 +37,37 @@ pub struct SceneLights(pub Vec<crate::renderer::Light>);
 /// Whether the one-key control hint is currently held open.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HelpOverlay(pub bool);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ViewMode {
+    #[default]
+    Fps,
+    God,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ViewModeState {
+    pub mode: ViewMode,
+    pub god_mode_enabled: bool,
+    pub fly_speed: f32,
+}
+
+impl Default for ViewModeState {
+    fn default() -> Self {
+        Self {
+            mode: ViewMode::Fps,
+            god_mode_enabled: true,
+            fly_speed: 12.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PhysicsDebugState {
+    pub colliders: bool,
+    pub velocities: bool,
+    pub contacts: bool,
+}
 
 /// GPU texture views for asset textures, keyed by asset id.
 #[derive(Debug, Clone, Default)]
@@ -75,6 +110,10 @@ pub struct EnemyFlashMaterial(pub crate::asset::Handle<crate::asset::Material>);
 
 pub fn register_default_systems(schedule: &mut Schedule) {
     schedule.add_system(Stage::Update, menu::system);
+    schedule.add_system(Stage::Update, time_control::system);
+    schedule.add_system(Stage::Update, view_mode::system);
+    schedule.add_system(Stage::Update, physics_debug::system);
+    schedule.add_system(Stage::Update, interaction::system);
     schedule.add_system(Stage::Update, player::input_system);
     schedule.add_system(Stage::Update, weapon::update_system);
     schedule.add_system(Stage::Update, sandbox::system);

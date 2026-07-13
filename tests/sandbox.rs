@@ -146,3 +146,106 @@ fn dynamic_bodies_enable_ccd() {
 
     assert!(physics.rigid_body_set.get(rb).unwrap().is_ccd_enabled());
 }
+
+#[test]
+fn shot_impulse_at_contact_wakes_and_moves_a_ball() {
+    let mut physics = PhysicsWorld::default();
+    let (body, _collider) = physics.add_dynamic_body(
+        Vec3::new(0.0, 1.0, 0.0),
+        PhysicsShape::Sphere { radius: 0.5 }.to_rapier_collider(),
+        0.55,
+    );
+    physics.apply_impulse_at_point(body, Vec3::new(0.0, 0.0, -5.0), Vec3::new(0.25, 1.0, 0.0));
+
+    let rigid_body = physics.rigid_body_set.get(body).unwrap();
+    assert!(!rigid_body.is_sleeping());
+    assert!(rigid_body.linvel().z < -1.0);
+    assert!(rigid_body.angvel().length_squared() > 0.0);
+}
+
+#[test]
+fn crosshair_raycast_ignores_player_body_and_hits_ball() {
+    let mut physics = PhysicsWorld::default();
+    let (player, _) = physics.add_dynamic_body(
+        Vec3::ZERO,
+        PhysicsShape::Capsule {
+            radius: 0.3,
+            half_height: 0.5,
+        }
+        .to_rapier_collider(),
+        1.0,
+    );
+    let (_ball_body, ball_collider) = physics.add_dynamic_body(
+        Vec3::new(0.0, 0.0, -3.0),
+        PhysicsShape::Sphere { radius: 0.5 }.to_rapier_collider(),
+        0.5,
+    );
+    physics.step();
+
+    let ray = Ray::new(Vec3::ZERO, -Vec3::Z, 10.0);
+    let hit = physics
+        .cast_ray_excluding_body(&ray, player)
+        .expect("the ball should be visible through the player's own collider");
+    assert_eq!(hit.collider_handle, ball_collider);
+}
+
+#[test]
+fn held_ball_velocity_is_bounded() {
+    let mut physics = PhysicsWorld::default();
+    let mut sandbox = PhysicsSandbox::default();
+    let (body, _) = physics.add_dynamic_body(
+        Vec3::new(0.0, 1.0, -2.0),
+        PhysicsShape::Sphere { radius: 0.4 }.to_rapier_collider(),
+        0.55,
+    );
+    sandbox.hold_body(body, 3.0);
+    for _ in 0..8 {
+        sandbox.update_hold(&mut physics, Vec3::new(0.0, 1.0, 0.0), -Vec3::Z);
+    }
+    assert!(physics.get_body_velocity(body).unwrap().length() <= 11.01);
+}
+
+#[test]
+fn free_ball_angular_velocity_decays() {
+    let mut physics = PhysicsWorld::new(Vec3::ZERO);
+    let (body, _) = physics.add_dynamic_body(
+        Vec3::ZERO,
+        PhysicsShape::Sphere { radius: 0.5 }.to_rapier_collider(),
+        1.0,
+    );
+    physics
+        .rigid_body_set
+        .get_mut(body)
+        .unwrap()
+        .set_angvel(Vec3::new(0.0, 12.0, 0.0), true);
+    let before = physics.rigid_body_set.get(body).unwrap().angvel().length();
+    for _ in 0..120 {
+        physics.step();
+    }
+    let after = physics.rigid_body_set.get(body).unwrap().angvel().length();
+    assert!(
+        after < before * 0.5,
+        "angular damping should visibly slow a rolling ball"
+    );
+}
+
+#[test]
+fn manually_rotated_body_is_immediately_visible_to_raycasts() {
+    let mut physics = PhysicsWorld::default();
+    let (body, _) = physics.add_static_body(
+        Vec3::ZERO,
+        PhysicsShape::Cuboid {
+            half_extents: Vec3::new(2.0, 0.2, 0.2),
+        }
+        .to_rapier_collider(),
+    );
+    physics.step();
+    let ray = Ray::new(Vec3::new(0.0, 0.0, 3.0), -Vec3::Z, 10.0);
+    let before = physics.cast_ray(&ray).unwrap().distance;
+
+    physics.set_body_rotation(body, Quat::from_rotation_y(std::f32::consts::FRAC_PI_2));
+    physics.refresh_body_colliders(&[body]);
+
+    let after = physics.cast_ray(&ray).unwrap().distance;
+    assert!(after < before - 1.0);
+}

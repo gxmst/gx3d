@@ -3,11 +3,19 @@ use crate::game::Player;
 use crate::physics::PhysicsWorld;
 use crate::renderer::Camera;
 use glam::Vec3;
+use winit::event::MouseButton;
 use winit::keyboard::KeyCode;
 
 use super::PlayerBody;
 
 pub fn input_system(_world: &mut EngineWorld, resources: &Resources) {
+    if resources
+        .get::<super::ViewModeState>()
+        .map(|state| state.mode == super::ViewMode::God)
+        .unwrap_or(false)
+    {
+        return;
+    }
     if resources
         .get::<super::MenuState>()
         .map(|menu| menu.0.open)
@@ -32,9 +40,17 @@ pub fn input_system(_world: &mut EngineWorld, resources: &Resources) {
         (camera.forward(), camera.right())
     };
 
-    let (mouse_delta, wants_forward, wants_back, wants_right, wants_left, wants_sprint, wants_jump) = {
-        let input = resources
-            .expect::<crate::input::InputState>();
+    let (
+        mouse_delta,
+        wants_forward,
+        wants_back,
+        wants_right,
+        wants_left,
+        wants_sprint,
+        wants_jump,
+        aiming,
+    ) = {
+        let input = resources.expect::<crate::input::InputState>();
         (
             input.mouse_delta,
             input.is_key_pressed(KeyCode::KeyW),
@@ -43,8 +59,19 @@ pub fn input_system(_world: &mut EngineWorld, resources: &Resources) {
             input.is_key_pressed(KeyCode::KeyA),
             input.is_key_pressed(KeyCode::ShiftLeft),
             input.is_key_pressed(KeyCode::Space),
+            input.is_mouse_pressed(MouseButton::Right),
         )
     };
+
+    let real_dt = resources
+        .get::<Time>()
+        .map(|time| time.real_delta_seconds().min(0.05))
+        .unwrap_or(0.0);
+    {
+        let mut camera = resources.expect_mut::<Camera>();
+        let target_fov = if aiming { 48.0 } else { 70.0 };
+        camera.fov += (target_fov - camera.fov) * (real_dt * 12.0).clamp(0.0, 1.0);
+    }
 
     {
         let mut player = resources.remove::<Player>().expect("Player missing");
@@ -53,7 +80,7 @@ pub fn input_system(_world: &mut EngineWorld, resources: &Resources) {
             player.camera_controller.update_camera_rotation(
                 &mut camera,
                 &crate::input::InputState {
-                    mouse_delta,
+                    mouse_delta: mouse_delta * if aiming { 0.55 } else { 1.0 },
                     ..Default::default()
                 },
                 dt,
@@ -89,8 +116,7 @@ pub fn input_system(_world: &mut EngineWorld, resources: &Resources) {
         body.0
     };
     {
-        let mut physics = resources
-            .expect_mut::<PhysicsWorld>();
+        let mut physics = resources.expect_mut::<PhysicsWorld>();
         physics.set_body_horizontal_velocity(player_body, desired_velocity);
 
         if wants_jump {
@@ -104,6 +130,13 @@ pub fn input_system(_world: &mut EngineWorld, resources: &Resources) {
 }
 
 pub fn sync_system(_world: &mut EngineWorld, resources: &Resources) {
+    if resources
+        .get::<super::ViewModeState>()
+        .map(|state| state.mode == super::ViewMode::God)
+        .unwrap_or(false)
+    {
+        return;
+    }
     let player_body = resources.expect::<PlayerBody>().0;
 
     if let Some(pos) = resources

@@ -46,13 +46,21 @@ pub fn feedback_system(world: &mut EngineWorld, resources: &Resources) {
     // --- Collect dead enemies and their last position + physics body. ---
     // (Decided in weapon.rs via `EnemyAI::take_damage`.) Gather first so the
     // query borrow is released before we mutate the world.
-    let dead: Vec<(hecs::Entity, Vec3, Option<rapier3d::prelude::RigidBodyHandle>)> = world
+    let dead: Vec<(
+        hecs::Entity,
+        Vec3,
+        Option<rapier3d::prelude::RigidBodyHandle>,
+    )> = world
         .ecs
         .query::<(hecs::Entity, &EnemyAI, &Transform, Option<&PhysicsBody>)>()
         .iter()
         .filter(|(_, ai, _, _)| !ai.is_alive)
         .map(|(entity, _, transform, body)| {
-            (entity, transform.position, body.map(|b| b.rigid_body_handle))
+            (
+                entity,
+                transform.position,
+                body.map(|b| b.rigid_body_handle),
+            )
         })
         .collect();
 

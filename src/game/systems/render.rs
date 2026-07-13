@@ -16,16 +16,32 @@ struct DrawItem {
     dynamic_offset: u32,
 }
 
+struct RapierLineCollector(Vec<crate::renderer::DebugLine>);
+
+impl rapier3d::prelude::DebugRenderBackend for RapierLineCollector {
+    fn draw_line(
+        &mut self,
+        _object: rapier3d::prelude::DebugRenderObject,
+        a: rapier3d::prelude::Vector,
+        b: rapier3d::prelude::Vector,
+        color: rapier3d::prelude::DebugColor,
+    ) {
+        self.0.push(crate::renderer::DebugLine {
+            start: glam::Vec3::new(a.x, a.y, a.z),
+            end: glam::Vec3::new(b.x, b.y, b.z),
+            color: [color[0], color[1], color[2], 0.9],
+        });
+    }
+}
+
 pub fn system(world: &mut EngineWorld, resources: &Resources) {
     let renderer = resources.expect::<Renderer>();
-    let asset_manager = resources
-        .expect::<AssetManager>();
+    let asset_manager = resources.expect::<AssetManager>();
     let camera = resources.expect::<Camera>();
     let time = resources.expect::<Time>();
     let scene_lights = resources.expect::<SceneLights>();
     let weapon_model = resources.expect::<WeaponModel>();
-    let weapon = resources
-        .expect::<crate::game::Weapon>();
+    let weapon = resources.expect::<crate::game::Weapon>();
     let menu_open = resources
         .get::<MenuState>()
         .map(|menu| menu.0.open)
@@ -34,6 +50,9 @@ pub fn system(world: &mut EngineWorld, resources: &Resources) {
         .get::<InputState>()
         .map(|input| input.is_key_pressed(KeyCode::KeyF) && !menu_open)
         .unwrap_or(false);
+    let day_phase = (time.elapsed_seconds() / 360.0) * std::f32::consts::TAU + 0.75;
+    let sun_to = glam::Vec3::new(day_phase.cos(), day_phase.sin(), 0.28).normalize();
+    let daylight = (sun_to.y * 1.8 + 0.15).clamp(0.04, 1.0);
 
     // Convert scene lights to GPU format.
     let light_data: Vec<LightData> = scene_lights
@@ -46,7 +65,7 @@ pub fn system(world: &mut EngineWorld, resources: &Resources) {
                 LightType::Spot => 2,
             };
             let dir = if l.light_type == LightType::Directional {
-                l.position.normalize()
+                -sun_to
             } else {
                 glam::Vec3::ZERO
             };
@@ -54,7 +73,11 @@ pub fn system(world: &mut EngineWorld, resources: &Resources) {
                 position: l.position.into(),
                 light_type: lt,
                 color: l.color,
-                intensity: l.intensity,
+                intensity: if l.light_type == LightType::Directional {
+                    l.intensity * daylight
+                } else {
+                    l.intensity
+                },
                 direction: dir.into(),
                 range: l.range,
             }
@@ -122,6 +145,9 @@ pub fn system(world: &mut EngineWorld, resources: &Resources) {
         weapon,
         menu_open,
         show_help,
+        weapon_model.aim_blend > 0.5,
+        sun_to,
+        daylight,
         light_data,
         draws,
         world_draw_count,
@@ -139,6 +165,9 @@ fn render_frame(
     weapon: std::cell::Ref<'_, crate::game::Weapon>,
     menu_open: bool,
     show_help: bool,
+    aiming: bool,
+    sun_to: glam::Vec3,
+    daylight: f32,
     light_data: Vec<LightData>,
     mut draws: Vec<DrawItem>,
     world_draw_count: usize,
@@ -156,7 +185,7 @@ fn render_frame(
         .iter()
         .find(|l| l.light_type == LightType::Directional);
     let light_space_matrix = directional
-        .map(|l| compute_light_space_matrix(l.position))
+        .map(|_| compute_light_space_matrix(-sun_to))
         .unwrap_or(Mat4::IDENTITY);
 
     // Shadow pass: render world objects only.
@@ -192,6 +221,15 @@ fn render_frame(
         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Main Encoder"),
         });
+    resources.expect::<crate::renderer::SkyRenderer>().render(
+        &renderer.queue,
+        &mut encoder,
+        &renderer.hdr_color_view,
+        camera.view_projection_matrix(),
+        sun_to,
+        time.elapsed_seconds(),
+        daylight,
+    );
     let mut render_pass =
         renderer.create_render_pass(&mut encoder, &renderer.hdr_color_view, &renderer.depth_view);
     render_pass.set_pipeline(&renderer.pipeline);
@@ -243,6 +281,21 @@ fn render_frame(
         ao_view,
         &output_view,
     );
+    draw_physics_debug(resources, &renderer, &camera, &mut encoder, &output_view);
+    if !menu_open {
+        if let Some(focus) = resources.get::<crate::game::InteractionFocus>() {
+            renderer.overlay.borrow_mut().draw_hud(
+                &renderer.device,
+                &renderer.queue,
+                &mut encoder,
+                &output_view,
+                &focus,
+                aiming,
+                renderer.surface_config.width,
+                renderer.surface_config.height,
+            );
+        }
+    }
     if menu_open {
         if let Some(menu) = resources.get::<MenuState>() {
             renderer.overlay.borrow_mut().draw_pause_menu(
@@ -260,17 +313,33 @@ fn render_frame(
     renderer.queue.submit(std::iter::once(encoder.finish()));
     output.present();
 
+    let view_mode = resources
+        .get::<super::ViewModeState>()
+        .map(|state| state.mode)
+        .unwrap_or(super::ViewMode::Fps);
+    let mode_label = match view_mode {
+        super::ViewMode::Fps => "FPS",
+        super::ViewMode::God => "GOD",
+    };
+    let time_label = if time.is_paused() {
+        "PAUSED".to_string()
+    } else {
+        format!("{:.2}x", time.time_scale)
+    };
+
     if menu_open {
         renderer
             .window
             .set_title("GxEngine | 设置菜单 | Esc 返回游戏");
     } else if show_help {
         renderer.window.set_title(
-            "GxEngine Controls | WASD Move | Shift Sprint | Space Jump | LMB Shoot | E/MMB Grab | Wheel Distance | T Throw/Push | X Freeze | G Box | B Ball | H Heavy | Esc Mouse",
+            "GxEngine Controls | V FPS/God | P Pause | . Step | [/] Speed | F3 Colliders | F4 Velocity | F5 Contacts | WASD Move | E Grab | T Push | X Freeze | Delete Remove | Esc Menu",
         );
     } else {
         renderer.window.set_title(&format!(
-            "GxEngine | {:.1} FPS | Ammo: {} | Lights: {} | Pos: ({:.1}, {:.1}, {:.1}) | Hold F: Controls",
+            "GxEngine | {} | {} | {:.1} FPS | Ammo: {} | Lights: {} | Pos: ({:.1}, {:.1}, {:.1}) | Hold F: Controls",
+            mode_label,
+            time_label,
             time.fps(),
             weapon.current_ammo,
             scene_lights.0.len(),
@@ -279,6 +348,76 @@ fn render_frame(
             camera.position.z,
         ));
     }
+}
+
+fn draw_physics_debug(
+    resources: &Resources,
+    renderer: &Renderer,
+    camera: &Camera,
+    encoder: &mut wgpu::CommandEncoder,
+    target: &wgpu::TextureView,
+) {
+    let state = resources
+        .get::<super::PhysicsDebugState>()
+        .map(|state| *state)
+        .unwrap_or_default();
+    if !(state.colliders || state.velocities || state.contacts) {
+        return;
+    }
+
+    let physics = resources.expect::<crate::physics::PhysicsWorld>();
+    let mut collector = RapierLineCollector(Vec::new());
+    if state.colliders || state.contacts {
+        use rapier3d::prelude::{DebugRenderMode, DebugRenderPipeline, DebugRenderStyle};
+        let mut mode = DebugRenderMode::empty();
+        if state.colliders {
+            mode |= DebugRenderMode::COLLIDER_SHAPES;
+        }
+        if state.contacts {
+            mode |= DebugRenderMode::CONTACTS;
+        }
+        DebugRenderPipeline::new(DebugRenderStyle::default(), mode).render(
+            &mut collector,
+            &physics.rigid_body_set,
+            &physics.collider_set,
+            &physics.impulse_joint_set,
+            &physics.multibody_joint_set,
+            &physics.narrow_phase,
+        );
+    }
+    if state.velocities {
+        for (_, body) in physics.rigid_body_set.iter() {
+            if !body.is_dynamic() {
+                continue;
+            }
+            let p = body.translation();
+            let v = body.linvel();
+            let start = glam::Vec3::new(p.x, p.y, p.z);
+            let velocity = glam::Vec3::new(v.x, v.y, v.z);
+            if velocity.length_squared() > 0.0025 {
+                collector.0.push(crate::renderer::DebugLine {
+                    start,
+                    end: start + velocity * 0.18,
+                    color: if body.is_sleeping() {
+                        [0.45, 0.5, 0.55, 0.9]
+                    } else {
+                        [0.2, 0.9, 1.0, 0.95]
+                    },
+                });
+            }
+        }
+    }
+    resources
+        .expect::<crate::renderer::DebugLineRenderer>()
+        .render(
+            &renderer.device,
+            &renderer.queue,
+            encoder,
+            target,
+            &renderer.depth_view,
+            camera.view_projection_matrix(),
+            &collector.0,
+        );
 }
 
 fn compute_light_space_matrix(light_dir: glam::Vec3) -> Mat4 {

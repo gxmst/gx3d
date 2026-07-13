@@ -41,6 +41,7 @@ pub enum PhysicsShape {
     Cuboid { half_extents: Vec3 },
     Capsule { radius: f32, half_height: f32 },
     Cylinder { radius: f32, half_height: f32 },
+    Wedge { half_extents: Vec3 },
 }
 
 impl PhysicsShape {
@@ -58,6 +59,23 @@ impl PhysicsShape {
                 radius,
                 half_height,
             } => ColliderBuilder::cylinder(*half_height, *radius),
+            PhysicsShape::Wedge { half_extents: h } => {
+                let h = Vec3::new(
+                    valid_half_extent(h.x),
+                    valid_half_extent(h.y),
+                    valid_half_extent(h.z),
+                );
+                let points = vec![
+                    Vec3::new(-h.x, -h.y, -h.z),
+                    Vec3::new(h.x, -h.y, -h.z),
+                    Vec3::new(-h.x, -h.y, h.z),
+                    Vec3::new(h.x, -h.y, h.z),
+                    Vec3::new(-h.x, h.y, h.z),
+                    Vec3::new(h.x, h.y, h.z),
+                ];
+                ColliderBuilder::convex_hull(&points)
+                    .unwrap_or_else(|| ColliderBuilder::cuboid(h.x, h.y, h.z))
+            }
         }
     }
 
@@ -70,5 +88,30 @@ impl PhysicsShape {
             .friction(material.friction)
             .restitution(material.restitution)
             .build()
+    }
+}
+
+fn valid_half_extent(value: f32) -> f32 {
+    if value.is_finite() && value.abs() >= 0.001 {
+        value.abs()
+    } else {
+        0.001
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PhysicsShape;
+    use glam::Vec3;
+
+    #[test]
+    fn degenerate_wedge_builds_a_finite_collider() {
+        let collider = PhysicsShape::Wedge {
+            half_extents: Vec3::new(0.0, f32::NAN, f32::INFINITY),
+        }
+        .to_rapier_collider();
+        let aabb = collider.compute_aabb();
+        assert!(aabb.mins.is_finite());
+        assert!(aabb.maxs.is_finite());
     }
 }

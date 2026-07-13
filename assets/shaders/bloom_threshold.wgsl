@@ -25,7 +25,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     return out;
 }
 
-const THRESHOLD: f32 = 1.0;
+const THRESHOLD: f32 = 1.65;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {

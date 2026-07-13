@@ -10,6 +10,7 @@ pub struct WeaponModel {
     pub scale: Vec3,
     pub recoil_offset: Vec3,
     pub recoil_rotation: Quat,
+    pub aim_blend: f32,
 }
 
 impl WeaponModel {
@@ -22,6 +23,7 @@ impl WeaponModel {
             scale: Vec3::new(0.02, 0.02, 0.12),
             recoil_offset: Vec3::ZERO,
             recoil_rotation: Quat::IDENTITY,
+            aim_blend: 0.0,
         }
     }
 
@@ -29,6 +31,11 @@ impl WeaponModel {
         // Smooth recoil recovery
         self.recoil_offset = self.recoil_offset.lerp(Vec3::ZERO, dt * 10.0);
         self.recoil_rotation = self.recoil_rotation.slerp(Quat::IDENTITY, dt * 10.0);
+    }
+
+    pub fn update_aim(&mut self, aiming: bool, dt: f32) {
+        let target = if aiming { 1.0 } else { 0.0 };
+        self.aim_blend += (target - self.aim_blend) * (dt * 12.0).clamp(0.0, 1.0);
     }
 
     pub fn apply_recoil(&mut self, impulse: Vec3) {
@@ -50,13 +57,14 @@ impl WeaponModel {
         let camera_up = camera.up();
 
         // Weapon offset from camera
-        let mut offset = camera_right * self.position.x
-            + camera_up * self.position.y
-            - camera_forward * self.position.z;
+        let hip = self.position;
+        let ads = Vec3::new(0.0, -0.19, -0.72);
+        let view_position = hip.lerp(ads, self.aim_blend);
+        let mut offset = camera_right * view_position.x + camera_up * view_position.y
+            - camera_forward * view_position.z;
 
         // Add recoil offset
-        offset += camera_right * self.recoil_offset.x
-            + camera_up * self.recoil_offset.y
+        offset += camera_right * self.recoil_offset.x + camera_up * self.recoil_offset.y
             - camera_forward * self.recoil_offset.z;
 
         let position = camera.position + offset;
@@ -70,13 +78,14 @@ impl WeaponModel {
     pub fn muzzle_world_matrix(&self, camera: &Camera, flash_scale: f32) -> Mat4 {
         // Same view-space convention as `world_matrix`: -Z is forward, so the
         // forward term subtracts `muzzle_offset.z` to sit in front of the camera.
-        let muzzle_offset = self.position
+        let hip = self.position;
+        let ads = Vec3::new(0.0, -0.19, -0.72);
+        let muzzle_offset = hip.lerp(ads, self.aim_blend)
             + Vec3::new(0.0, 0.06, -0.72)
             + self.recoil_offset * Vec3::new(1.0, 1.0, 0.4);
-        let position = camera.position
-            + camera.right() * muzzle_offset.x
-            + camera.up() * muzzle_offset.y
-            - camera.forward() * muzzle_offset.z;
+        let position =
+            camera.position + camera.right() * muzzle_offset.x + camera.up() * muzzle_offset.y
+                - camera.forward() * muzzle_offset.z;
         Mat4::from_scale_rotation_translation(Vec3::splat(flash_scale), camera.rotation, position)
     }
 }

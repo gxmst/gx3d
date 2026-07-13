@@ -106,6 +106,17 @@ pub enum MeshSource {
     },
     /// The built-in procedural rifle mesh.
     Rifle,
+    /// Triangular prism useful for ramps, broken masonry and roof pieces.
+    Wedge,
+    /// Simple articulated-looking humanoid assembled into one render mesh.
+    Humanoid,
+    /// A flattened primitive from a glTF/GLB scene. Node transforms are baked
+    /// by the loader; `primitive` indexes the imported primitive list.
+    Gltf {
+        path: String,
+        #[serde(default)]
+        primitive: usize,
+    },
 }
 
 /// A PBR material defined inline as constant factors (no textures).
@@ -173,6 +184,18 @@ pub struct EntityDesc {
     /// Optional physics body. Absent means render-only (no collider).
     #[serde(default)]
     pub physics: Option<PhysicsDesc>,
+    #[serde(default)]
+    pub interaction: Option<InteractionDesc>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum InteractionDesc {
+    Door {
+        open_rotation: [f32; 3],
+        #[serde(default = "default_door_speed")]
+        speed: f32,
+    },
 }
 
 /// Placement of an entity. Rotation is in **degrees** (Euler XYZ) so scenes
@@ -216,6 +239,7 @@ pub enum ShapeDesc {
     Cuboid([f32; 3]),
     Capsule([f32; 2]),
     Cylinder([f32; 2]),
+    Wedge([f32; 3]),
 }
 
 /// A physics surface material: either a named preset or custom values.
@@ -305,6 +329,9 @@ fn default_cylinder_segments() -> u32 {
 fn default_plane_size() -> f32 {
     1.0
 }
+fn default_door_speed() -> f32 {
+    4.5
+}
 
 #[cfg(test)]
 mod tests {
@@ -355,7 +382,7 @@ mod tests {
     fn embedded_dust2_scene_parses() {
         let text = include_str!("../../../assets/scenes/dust2.json");
         let scene = Scene::from_json(text).expect("dust2.json must parse");
-        assert_eq!(scene.entities.len(), 24);
+        assert_eq!(scene.entities.len(), 99);
         let mesh_names: Vec<&str> = scene.meshes.iter().map(|m| m.name.as_str()).collect();
         for required in ["cube", "sphere", "cylinder", "rifle"] {
             assert!(mesh_names.contains(&required), "missing mesh `{required}`");

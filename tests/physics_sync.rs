@@ -60,4 +60,8 @@ fn frozen_body_does_not_fall() {
 
     let transform = world.get_component::<Transform>(entity).unwrap();
     assert!((transform.position.y - 10.0).abs() < 0.01);
+    let physics = resources.get::<PhysicsWorld>().unwrap();
+    let body = physics.rigid_body_set.get(rb).unwrap();
+    assert!(body.is_fixed());
+    assert!((body.translation().y - 10.0).abs() < 0.01);
 }

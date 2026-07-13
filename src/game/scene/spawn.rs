@@ -5,14 +5,14 @@
 //! only *reference* by name (procedural meshes, GPU upload, weapons) is wired
 //! up by the caller in `setup.rs` using the name → handle maps returned here.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use glam::{EulerRot, Quat, Vec3};
 use hecs::Entity;
 
-use crate::asset::{AssetManager, Handle, Material, Mesh, ProceduralGenerator};
+use crate::asset::{AssetManager, GltfLoader, Handle, Material, Mesh, ProceduralGenerator};
 use crate::core::{EngineWorld, Name, Transform};
-use crate::game::EnemySpawner;
+use crate::game::{EnemySpawner, ToggleDoor};
 use crate::physics::{PhysicsBody, PhysicsMaterial, PhysicsShape, PhysicsWorld};
 use crate::renderer::{Light, RenderMesh};
 
@@ -69,8 +69,40 @@ pub fn spawn_scene(
 ) -> SpawnedScene {
     // --- Meshes -----------------------------------------------------------
     let mut meshes: HashMap<String, Handle<Mesh>> = HashMap::new();
+    let mut gltf_materials: HashMap<String, Handle<Material>> = HashMap::new();
+    let mut gltf_cache = HashMap::new();
+    let mut failed_gltf_paths = HashSet::new();
     for desc in &scene.meshes {
-        let handle = assets.meshes.insert(build_mesh(&desc.source));
+        let handle = match &desc.source {
+            MeshSource::Gltf { path, primitive } => {
+                if !gltf_cache.contains_key(path) && !failed_gltf_paths.contains(path) {
+                    match GltfLoader::load(path, assets) {
+                        Ok(imported) => {
+                            gltf_cache.insert(path.clone(), imported);
+                        }
+                        Err(error) => {
+                            log::error!("Failed to load glTF `{path}`: {error}");
+                            failed_gltf_paths.insert(path.clone());
+                        }
+                    }
+                }
+                let Some(imported) = gltf_cache.get(path) else {
+                    continue;
+                };
+                let Some(handle) = imported.meshes.get(*primitive).copied() else {
+                    log::error!(
+                        "glTF `{path}` has no primitive {primitive}; skipping mesh `{}`",
+                        desc.name
+                    );
+                    continue;
+                };
+                if let Some(material) = imported.mesh_materials.get(*primitive).copied() {
+                    gltf_materials.insert(desc.name.clone(), material);
+                }
+                handle
+            }
+            source => assets.meshes.insert(build_mesh(source)),
+        };
         if meshes.insert(desc.name.clone(), handle).is_some() {
             log::warn!("Scene declares duplicate mesh name `{}`", desc.name);
         }
@@ -87,7 +119,7 @@ pub fn spawn_scene(
 
     // --- Entities ---------------------------------------------------------
     for desc in &scene.entities {
-        spawn_entity(desc, world, physics, &meshes, &materials);
+        spawn_entity(desc, world, physics, &meshes, &materials, &gltf_materials);
     }
 
     // --- Lights -----------------------------------------------------------
@@ -120,6 +152,9 @@ fn build_mesh(source: &MeshSource) -> Mesh {
             ProceduralGenerator::create_plane(*size, *subdivisions)
         }
         MeshSource::Rifle => ProceduralGenerator::create_rifle(),
+        MeshSource::Wedge => ProceduralGenerator::create_wedge(),
+        MeshSource::Humanoid => ProceduralGenerator::create_humanoid(),
+        MeshSource::Gltf { .. } => unreachable!("glTF meshes are loaded directly into assets"),
     }
 }
 
@@ -199,6 +234,9 @@ fn build_shape(desc: &ShapeDesc) -> PhysicsShape {
             radius: *radius,
             half_height: *half_height,
         },
+        ShapeDesc::Wedge(half_extents) => PhysicsShape::Wedge {
+            half_extents: Vec3::from_array(*half_extents),
+        },
     }
 }
 
@@ -226,6 +264,7 @@ fn spawn_entity(
     physics: &mut PhysicsWorld,
     meshes: &HashMap<String, Handle<Mesh>>,
     materials: &HashMap<String, Handle<Material>>,
+    gltf_materials: &HashMap<String, Handle<Material>>,
 ) {
     let Some(mesh) = meshes.get(&desc.mesh).copied() else {
         log::warn!(
@@ -234,10 +273,16 @@ fn spawn_entity(
         );
         return;
     };
-    let Some(material) = materials.get(&desc.material).copied() else {
+    let material = if desc.material == "$gltf" {
+        gltf_materials.get(&desc.mesh).copied()
+    } else {
+        materials.get(&desc.material).copied()
+    };
+    let Some(material) = material else {
         log::warn!(
-            "Skipping entity: unknown material `{}` (declare it in `materials`)",
-            desc.material
+            "Skipping entity: unknown material `{}` for mesh `{}`",
+            desc.material,
+            desc.mesh
         );
         return;
     };
@@ -256,6 +301,29 @@ fn spawn_entity(
 
     if let Some(physics_desc) = &desc.physics {
         attach_physics(entity, physics_desc, &transform, world, physics);
+    }
+    if let Some(super::InteractionDesc::Door {
+        open_rotation,
+        speed,
+    }) = &desc.interaction
+    {
+        let [rx, ry, rz] = *open_rotation;
+        let relative = Quat::from_euler(
+            EulerRot::XYZ,
+            rx.to_radians(),
+            ry.to_radians(),
+            rz.to_radians(),
+        );
+        world.add_component(
+            entity,
+            ToggleDoor {
+                closed_rotation: transform.rotation,
+                open_rotation: transform.rotation * relative,
+                open: false,
+                progress: 0.0,
+                speed: *speed,
+            },
+        );
     }
 }
 
@@ -292,15 +360,28 @@ fn spawn_enemies(
     materials: &HashMap<String, Handle<Material>>,
 ) -> Vec<Entity> {
     let mut spawner = EnemySpawner::new();
-    spawner.spawn_points = desc.spawn_points.iter().copied().map(Vec3::from_array).collect();
-    spawner.waypoints = desc.waypoints.iter().copied().map(Vec3::from_array).collect();
+    spawner.spawn_points = desc
+        .spawn_points
+        .iter()
+        .copied()
+        .map(Vec3::from_array)
+        .collect();
+    spawner.waypoints = desc
+        .waypoints
+        .iter()
+        .copied()
+        .map(Vec3::from_array)
+        .collect();
     spawner.enemy_mesh = meshes.get(&desc.mesh).copied();
     spawner.enemy_material = materials.get(&desc.material).copied();
     if spawner.enemy_mesh.is_none() {
         log::warn!("Enemy mesh `{}` not found in scene meshes", desc.mesh);
     }
     if spawner.enemy_material.is_none() {
-        log::warn!("Enemy material `{}` not found in scene materials", desc.material);
+        log::warn!(
+            "Enemy material `{}` not found in scene materials",
+            desc.material
+        );
     }
     spawner.spawn_enemies(world, physics)
 }

@@ -11,7 +11,7 @@ wgpu = "29.0"
 # 数学库
 glam = "0.33"
 # 物理引擎
-rapier3d = "0.33"
+rapier3d = { version = "0.33", features = ["debug-render"] }
 # 图像加载与基础转换
 image = "0.25"
 # glTF 加载

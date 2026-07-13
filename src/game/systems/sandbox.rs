@@ -24,6 +24,7 @@ pub fn system(world: &mut EngineWorld, resources: &Resources) {
         toggle_freeze,
         throw_or_push,
         scroll_delta,
+        delete_target,
     ) = {
         let input = resources.expect::<InputState>();
         (
@@ -35,6 +36,7 @@ pub fn system(world: &mut EngineWorld, resources: &Resources) {
             input.is_key_just_pressed(KeyCode::KeyX),
             input.is_key_just_pressed(KeyCode::KeyT),
             input.mouse_scroll,
+            input.is_key_just_pressed(KeyCode::Delete),
         )
     };
     let (camera_pos, camera_forward) = {
@@ -43,13 +45,13 @@ pub fn system(world: &mut EngineWorld, resources: &Resources) {
     };
 
     let ray = Ray::new(camera_pos, camera_forward, 10.0);
+    let player_body = resources.expect::<super::PlayerBody>().0;
     let mut sandbox = resources
         .remove::<PhysicsSandbox>()
         .expect("Sandbox missing");
 
     {
-        let mut physics = resources
-            .expect_mut::<PhysicsWorld>();
+        let mut physics = resources.expect_mut::<PhysicsWorld>();
 
         if spawn_box {
             let transform =
@@ -104,7 +106,9 @@ pub fn system(world: &mut EngineWorld, resources: &Resources) {
         if pick_or_drop {
             if sandbox.held_body.is_some() {
                 sandbox.drop_body();
-            } else if let Some(body) = sandbox.ray_pick(world, &physics, &ray) {
+            } else if let Some(body) =
+                sandbox.ray_pick_excluding(world, &physics, &ray, player_body)
+            {
                 let distance = physics
                     .get_body_position(body)
                     .map(|p| (p - camera_pos).length())
@@ -120,7 +124,9 @@ pub fn system(world: &mut EngineWorld, resources: &Resources) {
                 } else {
                     sandbox.freeze(&mut physics, body);
                 }
-            } else if let Some(body) = sandbox.ray_pick(world, &physics, &ray) {
+            } else if let Some(body) =
+                sandbox.ray_pick_excluding(world, &physics, &ray, player_body)
+            {
                 if sandbox.is_frozen(&physics, body) {
                     sandbox.unfreeze(&mut physics, body);
                 } else {
@@ -133,11 +139,27 @@ pub fn system(world: &mut EngineWorld, resources: &Resources) {
             sandbox.adjust_hold_distance(scroll_delta);
         }
 
-        if throw_or_push {
-            if !sandbox.throw_held(&mut physics, camera_forward, 18.0) {
-                let push_ray = Ray::new(camera_pos, camera_forward, 12.0);
-                if let Some(body) = sandbox.ray_pick(world, &physics, &push_ray) {
-                    physics.apply_impulse(body, camera_forward * 10.0);
+        if throw_or_push && !sandbox.throw_held(&mut physics, camera_forward, 18.0) {
+            let push_ray = Ray::new(camera_pos, camera_forward, 12.0);
+            if let Some(body) = sandbox.ray_pick_excluding(world, &physics, &push_ray, player_body)
+            {
+                physics.apply_impulse(body, camera_forward * 10.0);
+            }
+        }
+
+        if delete_target {
+            if let Some(hit) = physics.cast_ray_excluding_body(&ray, player_body) {
+                if let Some(entity) = hit.entity {
+                    if let Some(body) = world.get_component::<crate::physics::PhysicsBody>(entity) {
+                        if !body.is_static {
+                            let handle = body.rigid_body_handle;
+                            if sandbox.held_body == Some(handle) {
+                                sandbox.drop_body();
+                            }
+                            physics.remove_body(handle);
+                            world.despawn(entity);
+                        }
+                    }
                 }
             }
         }

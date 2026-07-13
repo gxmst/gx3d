@@ -1,4 +1,5 @@
 pub mod enemy;
+pub mod interaction;
 pub mod menu;
 pub mod player;
 pub mod scene;
@@ -8,6 +9,7 @@ pub mod weapon;
 pub mod weapon_model;
 
 pub use enemy::*;
+pub use interaction::*;
 pub use menu::*;
 pub use player::*;
 pub use test_scene::*;

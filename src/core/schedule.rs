@@ -84,7 +84,15 @@ impl App {
         resources.insert(crate::core::ExitRequested(false));
 
         let renderer = crate::renderer::Renderer::new(Arc::clone(&window)).await?;
+        let debug_line_renderer = crate::renderer::DebugLineRenderer::new(
+            &renderer.device,
+            renderer.surface_config.format,
+        );
+        let sky_renderer =
+            crate::renderer::SkyRenderer::new(&renderer.device, wgpu::TextureFormat::Rgba16Float);
         resources.insert(renderer);
+        resources.insert(debug_line_renderer);
+        resources.insert(sky_renderer);
 
         let mut schedule = Schedule::new();
         crate::game::systems::setup::register(&mut schedule);
@@ -128,9 +136,7 @@ impl App {
                     .map(|input| input.window_focused)
                     .unwrap_or(true);
                 if mouse_locked && !menu_open && focused {
-                    let mut input = self
-                        .resources
-                        .expect_mut::<crate::input::InputState>();
+                    let mut input = self.resources.expect_mut::<crate::input::InputState>();
                     input.process_mouse_motion(glam::Vec2::new(delta.0 as f32, delta.1 as f32));
                 }
             }
@@ -149,9 +155,7 @@ impl App {
                     }
                 }
                 WindowEvent::KeyboardInput { event, .. } => {
-                    let mut input = self
-                        .resources
-                        .expect_mut::<crate::input::InputState>();
+                    let mut input = self.resources.expect_mut::<crate::input::InputState>();
                     if let PhysicalKey::Code(keycode) = event.physical_key {
                         input.process_key(keycode, event.state);
                         if keycode == winit::keyboard::KeyCode::Escape
@@ -198,18 +202,14 @@ impl App {
                     }
                 }
                 WindowEvent::CursorMoved { position, .. } => {
-                    let mut input = self
-                        .resources
-                        .expect_mut::<crate::input::InputState>();
+                    let mut input = self.resources.expect_mut::<crate::input::InputState>();
                     input.process_cursor_position(glam::Vec2::new(
                         position.x as f32,
                         position.y as f32,
                     ));
                 }
                 WindowEvent::MouseInput { state, button, .. } => {
-                    let mut input = self
-                        .resources
-                        .expect_mut::<crate::input::InputState>();
+                    let mut input = self.resources.expect_mut::<crate::input::InputState>();
                     input.process_mouse_button(*button, *state);
                     if *state == ElementState::Pressed {
                         drop(input);
@@ -229,9 +229,7 @@ impl App {
                     }
                 }
                 WindowEvent::MouseWheel { delta, .. } => {
-                    let mut input = self
-                        .resources
-                        .expect_mut::<crate::input::InputState>();
+                    let mut input = self.resources.expect_mut::<crate::input::InputState>();
                     let scroll = match delta {
                         MouseScrollDelta::LineDelta(_, y) => *y,
                         MouseScrollDelta::PixelDelta(pos) => pos.y as f32,
@@ -254,14 +252,27 @@ impl App {
         self.schedule
             .run_stage(Stage::Update, &mut self.world, &self.resources);
 
-        let should_fixed = self
-            .resources
-            .get_mut::<crate::core::Time>()
-            .map(|mut t| t.should_fixed_update())
-            .unwrap_or(false);
-        if should_fixed {
+        // Consume every accumulated fixed tick, with a safety cap to avoid a
+        // long frame causing an unbounded catch-up spiral. The timestep fed to
+        // Rapier remains constant; time_scale only controls tick frequency.
+        let mut fixed_steps = 0;
+        for _ in 0..8 {
+            let should_fixed = self
+                .resources
+                .get_mut::<crate::core::Time>()
+                .map(|mut t| t.should_fixed_update())
+                .unwrap_or(false);
+            if !should_fixed {
+                break;
+            }
             self.schedule
                 .run_stage(Stage::FixedUpdate, &mut self.world, &self.resources);
+            fixed_steps += 1;
+        }
+        if fixed_steps == 8 {
+            if let Some(mut time) = self.resources.get_mut::<crate::core::Time>() {
+                time.discard_fixed_update_backlog();
+            }
         }
 
         self.schedule

@@ -13,10 +13,18 @@ pub fn update_system(world: &mut EngineWorld, resources: &Resources) {
         .get::<Time>()
         .map(|t| t.delta_seconds().min(0.05))
         .unwrap_or(0.0);
+    let aiming = resources
+        .get::<crate::input::InputState>()
+        .map(|input| input.is_mouse_pressed(winit::event::MouseButton::Right))
+        .unwrap_or(false);
+    let real_dt = resources.expect::<Time>().real_delta_seconds().min(0.05);
+    {
+        let mut model = resources.expect_mut::<WeaponModel>();
+        model.update_aim(aiming, real_dt);
+    }
 
     {
-        let mut timer = resources
-            .expect_mut::<MuzzleFlashTimer>();
+        let mut timer = resources.expect_mut::<MuzzleFlashTimer>();
         if timer.0 > 0.0 {
             timer.0 -= dt;
         }
@@ -34,9 +42,7 @@ pub fn update_system(world: &mut EngineWorld, resources: &Resources) {
 
     let fired: bool;
     {
-        let input = resources
-            .expect::<crate::input::InputState>()
-            .clone();
+        let input = resources.expect::<crate::input::InputState>().clone();
         let mut weapon = resources.expect_mut::<Weapon>();
         fired = weapon.update(dt, &input);
     }
@@ -44,20 +50,21 @@ pub fn update_system(world: &mut EngineWorld, resources: &Resources) {
     if fired {
         let (recoil, damage) = {
             let weapon_ref = resources.expect::<Weapon>();
-            (weapon_ref.get_recoil(), weapon_ref.damage)
+            (
+                weapon_ref.get_recoil() * if aiming { 0.62 } else { 1.0 },
+                weapon_ref.damage,
+            )
         };
         {
             let mut player = resources.expect_mut::<Player>();
             player.camera_controller.apply_recoil(recoil);
         }
         {
-            let mut weapon_model = resources
-                .expect_mut::<WeaponModel>();
+            let mut weapon_model = resources.expect_mut::<WeaponModel>();
             weapon_model.apply_recoil(Vec3::new(0.0, 0.005, -0.02));
         }
         {
-            let mut timer = resources
-                .expect_mut::<MuzzleFlashTimer>();
+            let mut timer = resources.expect_mut::<MuzzleFlashTimer>();
             timer.0 = 0.06;
         }
 
@@ -69,7 +76,8 @@ pub fn update_system(world: &mut EngineWorld, resources: &Resources) {
             let ray = Ray::new(camera_pos, camera_forward, 100.0);
             let hit = {
                 let physics = resources.expect::<PhysicsWorld>();
-                physics.cast_ray(&ray)
+                let player_body = resources.expect::<super::PlayerBody>().0;
+                physics.cast_ray_excluding_body(&ray, player_body)
             };
             if let Some(hit) = hit {
                 if let Some(entity) = hit.entity {
@@ -82,16 +90,13 @@ pub fn update_system(world: &mut EngineWorld, resources: &Resources) {
                             damage,
                             camera_forward.normalize_or_zero(),
                         );
-                    } else if let Ok(body) = world.ecs.get::<&PhysicsBody>(entity) {
-                        if !body.is_static {
-                            if let Some(mut physics) = resources.get_mut::<PhysicsWorld>() {
-                                physics.apply_impulse(
-                                    body.rigid_body_handle,
-                                    camera_forward.normalize_or_zero() * 2.4,
-                                );
-                            }
-                        }
+                    } else {
+                        react_physics_hit(world, resources, &hit, camera_forward);
                     }
+                } else {
+                    // A collider can still have a valid parent body even when
+                    // no ECS mapping exists. Keep physical hit feedback robust.
+                    react_physics_hit(world, resources, &hit, camera_forward);
                 }
                 spawn_hit_feedback(world, resources, hit.point, hit.normal);
             }
@@ -107,9 +112,42 @@ pub fn update_system(world: &mut EngineWorld, resources: &Resources) {
     update_weapon_model(resources, dt);
 }
 
+fn react_physics_hit(
+    world: &EngineWorld,
+    resources: &Resources,
+    hit: &crate::physics::RaycastHit,
+    shot_direction: Vec3,
+) {
+    let mapped_body = hit.entity.and_then(|entity| {
+        world
+            .ecs
+            .get::<&PhysicsBody>(entity)
+            .ok()
+            .and_then(|body| (!body.is_static).then_some(body.rigid_body_handle))
+    });
+    let mut physics = resources.expect_mut::<PhysicsWorld>();
+    let body_handle = mapped_body.or_else(|| physics.collider_body(hit.collider_handle));
+    let Some(body_handle) = body_handle else {
+        return;
+    };
+    let Some(body) = physics.rigid_body_set.get(body_handle) else {
+        return;
+    };
+    if !body.is_dynamic() {
+        return;
+    }
+    // Scale gently with mass so light balls visibly jump while heavy props
+    // still acknowledge a hit without turning into rockets.
+    let strength = 4.5 + body.mass().sqrt().min(4.0) * 1.4;
+    physics.apply_impulse_at_point(
+        body_handle,
+        shot_direction.normalize_or_zero() * strength,
+        hit.point,
+    );
+}
+
 fn update_weapon_model(resources: &Resources, dt: f32) {
-    let mut weapon_model = resources
-        .expect_mut::<WeaponModel>();
+    let mut weapon_model = resources.expect_mut::<WeaponModel>();
     weapon_model.update(dt);
 }
 
@@ -181,18 +219,22 @@ fn react_enemy_hit(
 }
 
 fn spawn_hit_feedback(world: &mut EngineWorld, resources: &Resources, point: Vec3, normal: Vec3) {
-    let assets = resources
-        .expect::<WeaponFeedbackAssets>();
+    let assets = resources.expect::<WeaponFeedbackAssets>();
     let normal = normal.normalize_or_zero();
-    let rotation = Quat::from_rotation_arc(Vec3::Y, normal);
+    let base_rotation = Quat::from_rotation_arc(Vec3::Y, normal);
+    let random_roll = ((point.dot(Vec3::new(12.9898, 78.233, 37.719)).sin() * 43_758.547)
+        .fract()
+        .abs())
+        * std::f32::consts::TAU;
+    let rotation = base_rotation * Quat::from_rotation_y(random_roll);
 
     let bullet_hole = world.spawn();
     world.add_component(
         bullet_hole,
         Transform::new(
-            point + normal * 0.018,
+            point + normal * 0.012,
             rotation,
-            Vec3::new(0.11, 0.006, 0.11),
+            Vec3::new(0.16, 0.006, 0.16),
         ),
     );
     world.add_component(
@@ -202,13 +244,12 @@ fn spawn_hit_feedback(world: &mut EngineWorld, resources: &Resources, point: Vec
             material: assets.bullet_hole_material,
         },
     );
-    // Short-lived so impact marks read as feedback, not permanent litter.
-    world.add_component(bullet_hole, TimedEffect { remaining: 3.0 });
+    world.add_component(bullet_hole, TimedEffect { remaining: 12.0 });
 
     let impact = world.spawn();
     world.add_component(
         impact,
-        Transform::new(point + normal * 0.04, Quat::IDENTITY, Vec3::splat(0.12)),
+        Transform::new(point + normal * 0.035, Quat::IDENTITY, Vec3::splat(0.09)),
     );
     world.add_component(
         impact,

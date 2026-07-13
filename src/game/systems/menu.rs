@@ -8,8 +8,7 @@ use super::MenuState;
 
 pub fn system(_world: &mut EngineWorld, resources: &Resources) {
     let (clicked, cursor) = {
-        let input = resources
-            .expect::<crate::input::InputState>();
+        let input = resources.expect::<crate::input::InputState>();
         (
             input.is_mouse_just_pressed(MouseButton::Left),
             input.mouse_position,
@@ -51,6 +50,18 @@ pub fn system(_world: &mut EngineWorld, resources: &Resources) {
         Some(MenuAction::SetLanguage(Language::SimplifiedChinese)) => {
             let mut menu = resources.expect_mut::<MenuState>();
             menu.0.language = Language::SimplifiedChinese;
+        }
+        Some(MenuAction::ToggleGodMode) => {
+            let enabled = {
+                let mut menu = resources.expect_mut::<MenuState>();
+                menu.0.god_mode_enabled = !menu.0.god_mode_enabled;
+                menu.0.god_mode_enabled
+            };
+            let mut view = resources.expect_mut::<super::ViewModeState>();
+            view.god_mode_enabled = enabled;
+            if !enabled {
+                view.mode = super::ViewMode::Fps;
+            }
         }
         None => {}
     }
