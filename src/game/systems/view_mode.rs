@@ -46,6 +46,9 @@ pub fn system(_world: &mut EngineWorld, resources: &Resources) {
             }
         };
         if entered_god_mode {
+            if let Some(mut player) = resources.get_mut::<Player>() {
+                player.stop_movement();
+            }
             let body = resources.expect::<PlayerBody>().0;
             resources
                 .expect_mut::<PhysicsWorld>()

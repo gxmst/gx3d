@@ -1,20 +1,59 @@
 use crate::core::Transform;
 use crate::core::{EngineWorld, Resources, Time};
 use crate::game::EnemyAI;
-use crate::physics::PhysicsBody;
+use crate::physics::{PhysicsBody, PhysicsWorld};
 use crate::renderer::RenderMesh;
 use glam::{Quat, Vec3};
+use rapier3d::control::{CharacterAutostep, CharacterLength, KinematicCharacterController};
 
 use super::{HitFlash, TimedEffect, WeaponFeedbackAssets};
 
 pub fn system(world: &mut EngineWorld, resources: &Resources) {
     let dt = resources
         .get::<Time>()
-        .map(|t| t.delta_seconds().min(0.05))
+        .map(|t| t.fixed_timestep)
         .unwrap_or(0.0);
 
-    for (transform, ai) in world.ecs.query::<(&mut Transform, &mut EnemyAI)>().iter() {
+    let controller = KinematicCharacterController {
+        offset: CharacterLength::Absolute(0.025),
+        slide: true,
+        autostep: Some(CharacterAutostep {
+            max_height: CharacterLength::Absolute(0.32),
+            min_width: CharacterLength::Absolute(0.18),
+            include_dynamic_bodies: false,
+        }),
+        max_slope_climb_angle: 46.0_f32.to_radians(),
+        min_slope_slide_angle: 55.0_f32.to_radians(),
+        snap_to_ground: Some(CharacterLength::Absolute(0.32)),
+        normal_nudge_factor: 1.0e-3,
+        ..Default::default()
+    };
+    let mut physics = resources.expect_mut::<PhysicsWorld>();
+    for (transform, ai, body) in world
+        .ecs
+        .query::<(&mut Transform, &mut EnemyAI, Option<&PhysicsBody>)>()
+        .iter()
+    {
+        let previous = transform.position;
         ai.update(transform, dt);
+        let requested_horizontal = transform.position - previous;
+        if let Some(body) = body {
+            let requested = requested_horizontal + Vec3::NEG_Y * 0.08;
+            if let Some(movement) = physics.move_kinematic_character(
+                body.rigid_body_handle,
+                requested,
+                &controller,
+                70.0,
+            ) {
+                transform.position = previous + movement.translation;
+                let actual_horizontal =
+                    movement.translation - controller.up * movement.translation.dot(controller.up);
+                ai.report_constrained_movement(requested_horizontal, actual_horizontal, dt);
+            } else {
+                transform.position = previous;
+                ai.report_constrained_movement(requested_horizontal, Vec3::ZERO, dt);
+            }
+        }
     }
 }
 

@@ -1,6 +1,7 @@
 use crate::input::InputState;
 use glam::Vec2;
 use winit::event::MouseButton;
+use winit::keyboard::KeyCode;
 
 pub struct Weapon {
     pub name: String,
@@ -45,6 +46,11 @@ impl Weapon {
             return false;
         }
 
+        if input.is_key_just_pressed(KeyCode::KeyR) {
+            self.start_reload();
+            return false;
+        }
+
         if input.is_mouse_pressed(MouseButton::Left)
             && self.fire_cooldown <= 0.0
             && self.current_ammo > 0
@@ -75,4 +81,21 @@ impl Weapon {
 
 pub fn create_default_weapon() -> Weapon {
     Weapon::new("Rifle", 25.0, 10.0, 30)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Weapon;
+    use crate::input::InputState;
+    use winit::{event::ElementState, keyboard::KeyCode};
+
+    #[test]
+    fn reload_key_starts_reload_when_magazine_is_not_full() {
+        let mut weapon = Weapon::new("Test", 10.0, 5.0, 30);
+        weapon.current_ammo = 7;
+        let mut input = InputState::default();
+        input.process_key(KeyCode::KeyR, ElementState::Pressed);
+        assert!(!weapon.update(1.0 / 60.0, &input));
+        assert!(weapon.is_reloading);
+    }
 }

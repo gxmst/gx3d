@@ -46,6 +46,14 @@ pub fn system(world: &mut EngineWorld, resources: &Resources) {
 
     let ray = Ray::new(camera_pos, camera_forward, 10.0);
     let player_body = resources.expect::<super::PlayerBody>().0;
+    let spawn_position = {
+        let physics = resources.expect::<PhysicsWorld>();
+        let distance = physics
+            .cast_ray_excluding_body(&Ray::new(camera_pos, camera_forward, 3.8), player_body)
+            .map(|hit| (hit.distance - 0.8).min(3.0))
+            .unwrap_or(3.0);
+        (distance >= 1.4).then_some(camera_pos + camera_forward * distance)
+    };
     let mut sandbox = resources
         .remove::<PhysicsSandbox>()
         .expect("Sandbox missing");
@@ -53,23 +61,27 @@ pub fn system(world: &mut EngineWorld, resources: &Resources) {
     {
         let mut physics = resources.expect_mut::<PhysicsWorld>();
 
-        if spawn_box {
-            let transform =
-                Transform::new(camera_pos + camera_forward * 3.0, Quat::IDENTITY, Vec3::ONE);
+        if spawn_box && spawn_position.is_none() {
+            log::debug!("Not enough clear space in front of the camera to spawn a box");
+        }
+        if let (true, Some(spawn_position)) = (spawn_box, spawn_position) {
+            let transform = Transform::new(spawn_position, Quat::IDENTITY, Vec3::ONE);
             let mesh = sandbox.cube_mesh;
             let material = sandbox.box_material;
-            sandbox.spawn_dynamic_box(world, &mut physics, mesh, material, transform, 0.5, 1.0);
+            let entity =
+                sandbox.spawn_dynamic_box(world, &mut physics, mesh, material, transform, 0.5, 1.0);
+            world.add_component(entity, crate::core::Name("生成的木箱"));
+            sandbox.track_runtime_prop(entity, world, &mut physics);
         }
 
-        if spawn_bouncy {
-            let transform = Transform::new(
-                camera_pos + camera_forward * 3.0,
-                Quat::IDENTITY,
-                Vec3::splat(0.8),
-            );
+        if spawn_bouncy && spawn_position.is_none() {
+            log::debug!("Not enough clear space in front of the camera to spawn a ball");
+        }
+        if let (true, Some(spawn_position)) = (spawn_bouncy, spawn_position) {
+            let transform = Transform::new(spawn_position, Quat::IDENTITY, Vec3::splat(0.8));
             let mesh = sandbox.sphere_mesh;
             let material = sandbox.bouncy_material;
-            sandbox.spawn_dynamic_sphere(
+            let entity = sandbox.spawn_dynamic_sphere(
                 world,
                 &mut physics,
                 mesh,
@@ -79,17 +91,18 @@ pub fn system(world: &mut EngineWorld, resources: &Resources) {
                 0.6,
                 PhysicsMaterial::RUBBER,
             );
+            world.add_component(entity, crate::core::Name("高弹力球"));
+            sandbox.track_runtime_prop(entity, world, &mut physics);
         }
 
-        if spawn_heavy {
-            let transform = Transform::new(
-                camera_pos + camera_forward * 3.0,
-                Quat::IDENTITY,
-                Vec3::splat(1.1),
-            );
+        if spawn_heavy && spawn_position.is_none() {
+            log::debug!("Not enough clear space in front of the camera to spawn a heavy prop");
+        }
+        if let (true, Some(spawn_position)) = (spawn_heavy, spawn_position) {
+            let transform = Transform::new(spawn_position, Quat::IDENTITY, Vec3::splat(1.1));
             let mesh = sandbox.cube_mesh;
             let material = sandbox.heavy_material;
-            sandbox.spawn_prop_with_physics_material(
+            let entity = sandbox.spawn_prop_with_physics_material(
                 world,
                 &mut physics,
                 mesh,
@@ -101,6 +114,8 @@ pub fn system(world: &mut EngineWorld, resources: &Resources) {
                 8.0,
                 PhysicsMaterial::METAL,
             );
+            world.add_component(entity, crate::core::Name("重型金属箱"));
+            sandbox.track_runtime_prop(entity, world, &mut physics);
         }
 
         if pick_or_drop {
@@ -151,23 +166,38 @@ pub fn system(world: &mut EngineWorld, resources: &Resources) {
             if let Some(hit) = physics.cast_ray_excluding_body(&ray, player_body) {
                 if let Some(entity) = hit.entity {
                     if let Some(body) = world.get_component::<crate::physics::PhysicsBody>(entity) {
-                        if !body.is_static {
+                        if physics.is_sandbox_manipulable(&body) {
                             let handle = body.rigid_body_handle;
                             if sandbox.held_body == Some(handle) {
                                 sandbox.drop_body();
                             }
                             physics.remove_body(handle);
                             world.despawn(entity);
+                            sandbox.forget_runtime_prop(entity);
                         }
                     }
                 }
             }
         }
-
-        if sandbox.held_body.is_some() {
-            sandbox.update_hold(&mut physics, camera_pos, camera_forward);
-        }
     }
 
+    resources.insert(sandbox);
+}
+
+/// Advance the held-prop servo on the same fixed clock as Rapier. This keeps
+/// grabbing equally stiff at 30, 60, and 144 Hz render rates.
+pub fn fixed_update(_world: &mut EngineWorld, resources: &Resources) {
+    let (camera_pos, camera_forward) = {
+        let camera = resources.expect::<Camera>();
+        (camera.position, camera.forward())
+    };
+    let player_body = resources.expect::<super::PlayerBody>().0;
+    let mut sandbox = resources
+        .remove::<PhysicsSandbox>()
+        .expect("Sandbox missing");
+    if sandbox.held_body.is_some() {
+        let mut physics = resources.expect_mut::<PhysicsWorld>();
+        sandbox.update_hold_excluding(&mut physics, camera_pos, camera_forward, Some(player_body));
+    }
     resources.insert(sandbox);
 }

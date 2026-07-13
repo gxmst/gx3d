@@ -116,11 +116,33 @@ impl InputState {
     pub fn process_cursor_position(&mut self, position: Vec2) {
         self.mouse_position = position;
     }
+
+    pub fn clear_transient_and_held_input(&mut self) {
+        self.keys.clear();
+        self.mouse_buttons.clear();
+        self.mouse_delta = Vec2::ZERO;
+        self.mouse_scroll = 0.0;
+    }
 }
 
 impl Default for InputState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::InputState;
+    use winit::{event::ElementState, keyboard::KeyCode};
+
+    #[test]
+    fn focus_reset_clears_keys_that_may_never_receive_release_events() {
+        let mut input = InputState::default();
+        input.process_key(KeyCode::KeyW, ElementState::Pressed);
+        assert!(input.is_key_pressed(KeyCode::KeyW));
+        input.clear_transient_and_held_input();
+        assert!(!input.is_key_pressed(KeyCode::KeyW));
     }
 }
 

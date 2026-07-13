@@ -35,8 +35,10 @@ fn sync_to_physics(world: &mut EngineWorld, physics: &mut PhysicsWorld) {
         if body.is_static || !is_kinematic {
             continue;
         }
-        physics.set_body_position(body.rigid_body_handle, transform.position);
-        physics.set_body_rotation(body.rigid_body_handle, transform.rotation);
+        if let Some(rigid_body) = physics.rigid_body_set.get_mut(body.rigid_body_handle) {
+            rigid_body.set_next_kinematic_translation(transform.position);
+            rigid_body.set_next_kinematic_rotation(transform.rotation);
+        }
     }
 }
 

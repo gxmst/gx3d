@@ -181,6 +181,9 @@ impl App {
                 WindowEvent::Focused(focused) => {
                     if let Some(mut input) = self.resources.get_mut::<crate::input::InputState>() {
                         input.window_focused = *focused;
+                        if !*focused {
+                            input.clear_transient_and_held_input();
+                        }
                     }
                     if *focused {
                         let menu_open = self

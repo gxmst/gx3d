@@ -92,6 +92,32 @@ fn static_body_is_not_pickable() {
 }
 
 #[test]
+fn kinematic_actor_is_not_pickable_even_when_not_marked_static() {
+    let mut world = EngineWorld::new();
+    let mut physics = PhysicsWorld::default();
+    let sandbox = PhysicsSandbox::default();
+    let (rb, col) = physics.add_kinematic_body(
+        Vec3::ZERO,
+        PhysicsShape::Capsule {
+            radius: 0.4,
+            half_height: 0.8,
+        }
+        .to_rapier_collider(),
+    );
+    let entity = world.spawn();
+    world.add_component(entity, Transform::from_position(Vec3::ZERO));
+    // Enemies historically used `is_static = false`; the actual Rapier body
+    // type must still keep them out of the sandbox manipulation path.
+    world.add_component(entity, PhysicsBody::new(rb, col, false));
+    physics.register_entity(col, entity);
+    physics.step();
+
+    let ray = Ray::new(Vec3::new(0.0, 3.0, 0.0), -Vec3::Y, 10.0);
+    assert_eq!(sandbox.ray_pick(&world, &physics, &ray), None);
+    assert!(!physics.is_sandbox_manipulable(&PhysicsBody::new(rb, col, false)));
+}
+
+#[test]
 fn physics_material_is_applied_to_collider() {
     let collider = PhysicsShape::Sphere { radius: 0.5 }
         .to_rapier_collider_with_material(PhysicsMaterial::RUBBER);

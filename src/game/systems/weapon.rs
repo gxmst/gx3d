@@ -1,11 +1,12 @@
 use crate::core::{EngineWorld, Resources, Time, Transform};
-use crate::game::{EnemyAI, Player, Weapon, WeaponModel};
+use crate::game::{EnemyAI, Explosive, Player, Weapon, WeaponModel};
 use crate::physics::{PhysicsBody, PhysicsWorld, Ray};
 use crate::renderer::{Camera, RenderMesh};
 use glam::{Quat, Vec3};
 
 use super::{
-    EnemyFlashMaterial, HitFlash, MenuState, MuzzleFlashTimer, TimedEffect, WeaponFeedbackAssets,
+    EnemyFlashMaterial, HitFlash, HitMarkerTimer, MenuState, MuzzleFlashTimer, TimedEffect,
+    WeaponFeedbackAssets,
 };
 
 pub fn update_system(world: &mut EngineWorld, resources: &Resources) {
@@ -28,6 +29,9 @@ pub fn update_system(world: &mut EngineWorld, resources: &Resources) {
         if timer.0 > 0.0 {
             timer.0 -= dt;
         }
+    }
+    if let Some(mut timer) = resources.get_mut::<HitMarkerTimer>() {
+        timer.0 = (timer.0 - real_dt).max(0.0);
     }
     update_timed_effects(world, dt);
 
@@ -80,9 +84,13 @@ pub fn update_system(world: &mut EngineWorld, resources: &Resources) {
                 physics.cast_ray_excluding_body(&ray, player_body)
             };
             if let Some(hit) = hit {
+                if let Some(mut timer) = resources.get_mut::<HitMarkerTimer>() {
+                    timer.0 = if hit.entity.is_some() { 0.16 } else { 0.09 };
+                }
                 if let Some(entity) = hit.entity {
-                    let is_enemy = world.ecs.get::<&EnemyAI>(entity).is_ok();
-                    if is_enemy {
+                    if world.ecs.get::<&Explosive>(entity).is_ok() {
+                        detonate_explosive(world, resources, entity);
+                    } else if world.ecs.get::<&EnemyAI>(entity).is_ok() {
                         react_enemy_hit(
                             world,
                             resources,
@@ -110,6 +118,166 @@ pub fn update_system(world: &mut EngineWorld, resources: &Resources) {
     }
 
     update_weapon_model(resources, dt);
+}
+
+fn detonate_explosive(world: &mut EngineWorld, resources: &Resources, entity: hecs::Entity) {
+    let Some(explosive) = world.get_component::<Explosive>(entity) else {
+        return;
+    };
+    let Some(origin) = world
+        .get_component::<Transform>(entity)
+        .map(|transform| transform.position)
+    else {
+        return;
+    };
+    let source_body = world
+        .get_component::<PhysicsBody>(entity)
+        .map(|body| body.rigid_body_handle);
+    let radius = explosive.radius.max(0.1);
+    let affected: Vec<_> = world
+        .ecs
+        .query::<(&Transform, &PhysicsBody)>()
+        .iter()
+        .map(|(transform, body)| (transform.position, body.rigid_body_handle))
+        .collect();
+
+    {
+        let mut physics = resources.expect_mut::<PhysicsWorld>();
+        for (fallback_position, body_handle) in affected {
+            if Some(body_handle) == source_body {
+                continue;
+            }
+            let Some(body) = physics.rigid_body_set.get(body_handle) else {
+                continue;
+            };
+            if !body.is_dynamic() {
+                continue;
+            }
+            let position = physics
+                .get_body_position(body_handle)
+                .unwrap_or(fallback_position);
+            let offset = position - origin;
+            let distance = offset.length();
+            if distance > radius
+                || !explosion_reaches_body(&physics, origin, source_body, body_handle, position)
+            {
+                continue;
+            }
+            let direction = if distance > 0.01 {
+                offset / distance
+            } else {
+                Vec3::Y
+            };
+            let falloff = (1.0 - distance / radius).max(0.12);
+            let impulse =
+                (direction + Vec3::Y * 0.28).normalize_or_zero() * explosive.impulse * falloff;
+            physics.apply_impulse_at_point(body_handle, impulse, position);
+        }
+        if let Some(handle) = source_body {
+            physics.remove_body(handle);
+        }
+    }
+
+    let physics = resources.expect::<PhysicsWorld>();
+    for (transform, body, ai) in world
+        .ecs
+        .query::<(&Transform, &PhysicsBody, &mut EnemyAI)>()
+        .iter()
+    {
+        let distance = transform.position.distance(origin);
+        if distance <= radius
+            && explosion_reaches_body(
+                &physics,
+                origin,
+                source_body,
+                body.rigid_body_handle,
+                transform.position,
+            )
+        {
+            let falloff = 1.0 - distance / radius;
+            ai.take_damage(140.0 * falloff.max(0.2));
+            ai.stagger_timer = 0.35;
+        }
+    }
+    drop(physics);
+    world.despawn(entity);
+    spawn_explosion_burst(world, resources, origin, radius);
+    if let Some(mut audio) = resources.get_mut::<Option<crate::audio::AudioSystem>>() {
+        if let Some(ref mut audio) = *audio {
+            let _ = audio.play_sound(crate::audio::AudioSystem::create_explosion());
+        }
+    }
+}
+
+fn explosion_reaches_body(
+    physics: &PhysicsWorld,
+    origin: Vec3,
+    source_body: Option<rapier3d::prelude::RigidBodyHandle>,
+    target_body: rapier3d::prelude::RigidBodyHandle,
+    target_position: Vec3,
+) -> bool {
+    let offset = target_position - origin;
+    let distance = offset.length();
+    if !distance.is_finite() {
+        return false;
+    }
+    if distance <= 0.05 {
+        return true;
+    }
+
+    let ray = Ray::new(origin, offset, distance + 0.08);
+    let first_hit = match source_body {
+        Some(source) => physics.cast_ray_excluding_body(&ray, source),
+        None => physics.cast_ray(&ray),
+    };
+    first_hit.is_some_and(|hit| physics.collider_body(hit.collider_handle) == Some(target_body))
+}
+
+fn spawn_explosion_burst(
+    world: &mut EngineWorld,
+    resources: &Resources,
+    origin: Vec3,
+    radius: f32,
+) {
+    let assets = *resources.expect::<WeaponFeedbackAssets>();
+    let directions = [
+        Vec3::ZERO,
+        Vec3::X,
+        -Vec3::X,
+        Vec3::Y,
+        Vec3::Z,
+        -Vec3::Z,
+        Vec3::new(1.0, 0.6, 1.0).normalize(),
+        Vec3::new(-1.0, 0.8, 1.0).normalize(),
+        Vec3::new(1.0, 0.7, -1.0).normalize(),
+        Vec3::new(-1.0, 0.5, -1.0).normalize(),
+    ];
+    for (index, direction) in directions.into_iter().enumerate() {
+        let burst = world.spawn();
+        let spread = radius.min(6.0) * (0.08 + index as f32 * 0.012);
+        let scale = if index == 0 { 0.7 } else { 0.24 };
+        world.add_component(
+            burst,
+            Transform::new(
+                origin + direction * spread,
+                Quat::IDENTITY,
+                Vec3::splat(scale),
+            ),
+        );
+        world.add_component(
+            burst,
+            RenderMesh {
+                mesh: assets.impact_mesh,
+                material: assets.impact_material,
+            },
+        );
+        world.add_component(
+            burst,
+            TimedEffect {
+                remaining: 0.14 + index as f32 * 0.018,
+            },
+        );
+    }
 }
 
 fn react_physics_hit(
@@ -259,4 +427,208 @@ fn spawn_hit_feedback(world: &mut EngineWorld, resources: &Resources, point: Vec
         },
     );
     world.add_component(impact, TimedEffect { remaining: 0.08 });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::detonate_explosive;
+    use crate::core::{EngineWorld, Resources, Transform};
+    use crate::game::systems::WeaponFeedbackAssets;
+    use crate::game::Explosive;
+    use crate::physics::{PhysicsBody, PhysicsShape, PhysicsWorld};
+    use glam::Vec3;
+
+    #[test]
+    fn explosive_pushes_nearby_dynamic_body_and_removes_itself() {
+        let mut world = EngineWorld::new();
+        let resources = Resources::new();
+        let mut physics = PhysicsWorld::default();
+
+        let (source_body, source_collider) = physics.add_dynamic_body(
+            Vec3::ZERO,
+            PhysicsShape::Cylinder {
+                radius: 0.3,
+                half_height: 0.5,
+            }
+            .to_rapier_collider(),
+            2.0,
+        );
+        let source = world.spawn();
+        world.add_component(source, Transform::from_position(Vec3::ZERO));
+        world.add_component(
+            source,
+            PhysicsBody::new(source_body, source_collider, false),
+        );
+        world.add_component(
+            source,
+            Explosive {
+                radius: 5.0,
+                impulse: 20.0,
+            },
+        );
+        physics.register_entity(source_collider, source);
+
+        let (target_body, target_collider) = physics.add_dynamic_body(
+            Vec3::new(2.0, 0.0, 0.0),
+            PhysicsShape::Sphere { radius: 0.4 }.to_rapier_collider(),
+            1.0,
+        );
+        let target = world.spawn();
+        world.add_component(target, Transform::from_position(Vec3::new(2.0, 0.0, 0.0)));
+        world.add_component(
+            target,
+            PhysicsBody::new(target_body, target_collider, false),
+        );
+        physics.register_entity(target_collider, target);
+        physics.step();
+
+        resources.insert(physics);
+        resources.insert(WeaponFeedbackAssets {
+            bullet_hole_mesh: Default::default(),
+            bullet_hole_material: Default::default(),
+            impact_mesh: Default::default(),
+            impact_material: Default::default(),
+            muzzle_flash_mesh: Default::default(),
+            muzzle_flash_material: Default::default(),
+        });
+
+        detonate_explosive(&mut world, &resources, source);
+
+        assert!(!world.ecs.contains(source));
+        let physics = resources.expect::<PhysicsWorld>();
+        assert!(physics.get_body_velocity(target_body).unwrap().x > 0.0);
+    }
+
+    #[test]
+    fn wall_blocks_explosion_impulse() {
+        let mut world = EngineWorld::new();
+        let resources = Resources::new();
+        let mut physics = PhysicsWorld::new(Vec3::ZERO);
+
+        let (source_body, source_collider) = physics.add_dynamic_body(
+            Vec3::ZERO,
+            PhysicsShape::Sphere { radius: 0.25 }.to_rapier_collider(),
+            1.0,
+        );
+        let source = world.spawn();
+        world.add_component(source, Transform::from_position(Vec3::ZERO));
+        world.add_component(
+            source,
+            PhysicsBody::new(source_body, source_collider, false),
+        );
+        world.add_component(
+            source,
+            Explosive {
+                radius: 5.0,
+                impulse: 20.0,
+            },
+        );
+        physics.register_entity(source_collider, source);
+
+        physics.add_static_body(
+            Vec3::new(1.0, 0.0, 0.0),
+            PhysicsShape::Cuboid {
+                half_extents: Vec3::new(0.1, 2.0, 2.0),
+            }
+            .to_rapier_collider(),
+        );
+        let (target_body, target_collider) = physics.add_dynamic_body(
+            Vec3::new(2.0, 0.0, 0.0),
+            PhysicsShape::Sphere { radius: 0.35 }.to_rapier_collider(),
+            1.0,
+        );
+        let target = world.spawn();
+        world.add_component(target, Transform::from_position(Vec3::new(2.0, 0.0, 0.0)));
+        world.add_component(
+            target,
+            PhysicsBody::new(target_body, target_collider, false),
+        );
+        physics.register_entity(target_collider, target);
+        physics.step();
+
+        resources.insert(physics);
+        resources.insert(WeaponFeedbackAssets {
+            bullet_hole_mesh: Default::default(),
+            bullet_hole_material: Default::default(),
+            impact_mesh: Default::default(),
+            impact_material: Default::default(),
+            muzzle_flash_mesh: Default::default(),
+            muzzle_flash_material: Default::default(),
+        });
+
+        detonate_explosive(&mut world, &resources, source);
+
+        let physics = resources.expect::<PhysicsWorld>();
+        assert_eq!(physics.get_body_velocity(target_body), Some(Vec3::ZERO));
+    }
+
+    #[test]
+    fn wall_blocks_explosion_damage_to_enemy() {
+        let mut world = EngineWorld::new();
+        let resources = Resources::new();
+        let mut physics = PhysicsWorld::new(Vec3::ZERO);
+
+        let (source_body, source_collider) = physics.add_dynamic_body(
+            Vec3::ZERO,
+            PhysicsShape::Sphere { radius: 0.25 }.to_rapier_collider(),
+            1.0,
+        );
+        let source = world.spawn();
+        world.add_component(source, Transform::from_position(Vec3::ZERO));
+        world.add_component(
+            source,
+            PhysicsBody::new(source_body, source_collider, false),
+        );
+        world.add_component(
+            source,
+            Explosive {
+                radius: 5.0,
+                impulse: 20.0,
+            },
+        );
+        physics.register_entity(source_collider, source);
+        physics.add_static_body(
+            Vec3::new(1.0, 0.0, 0.0),
+            PhysicsShape::Cuboid {
+                half_extents: Vec3::new(0.1, 2.0, 2.0),
+            }
+            .to_rapier_collider(),
+        );
+
+        let enemy_position = Vec3::new(2.0, 0.0, 0.0);
+        let (enemy_body, enemy_collider) = physics.add_kinematic_body(
+            enemy_position,
+            PhysicsShape::Capsule {
+                radius: 0.4,
+                half_height: 0.8,
+            }
+            .to_rapier_collider(),
+        );
+        let enemy = world.spawn();
+        world.add_component(enemy, Transform::from_position(enemy_position));
+        world.add_component(enemy, PhysicsBody::new(enemy_body, enemy_collider, false));
+        world.add_component(enemy, crate::game::EnemyAI::new(Vec::new(), 2.0, 100.0));
+        physics.register_entity(enemy_collider, enemy);
+        physics.step();
+
+        resources.insert(physics);
+        resources.insert(WeaponFeedbackAssets {
+            bullet_hole_mesh: Default::default(),
+            bullet_hole_material: Default::default(),
+            impact_mesh: Default::default(),
+            impact_material: Default::default(),
+            muzzle_flash_mesh: Default::default(),
+            muzzle_flash_material: Default::default(),
+        });
+
+        detonate_explosive(&mut world, &resources, source);
+
+        assert_eq!(
+            world
+                .get_component::<crate::game::EnemyAI>(enemy)
+                .unwrap()
+                .health,
+            100.0
+        );
+    }
 }

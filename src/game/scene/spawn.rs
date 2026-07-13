@@ -12,7 +12,7 @@ use hecs::Entity;
 
 use crate::asset::{AssetManager, GltfLoader, Handle, Material, Mesh, ProceduralGenerator};
 use crate::core::{EngineWorld, Name, Transform};
-use crate::game::{EnemySpawner, ToggleDoor};
+use crate::game::{EnemySpawner, Explosive, ToggleDoor};
 use crate::physics::{PhysicsBody, PhysicsMaterial, PhysicsShape, PhysicsWorld};
 use crate::renderer::{Light, RenderMesh};
 
@@ -67,6 +67,9 @@ pub fn spawn_scene(
     physics: &mut PhysicsWorld,
     assets: &mut AssetManager,
 ) -> SpawnedScene {
+    for warning in scene.validation_warnings() {
+        log::warn!("Scene validation: {warning}");
+    }
     // --- Meshes -----------------------------------------------------------
     let mut meshes: HashMap<String, Handle<Mesh>> = HashMap::new();
     let mut gltf_materials: HashMap<String, Handle<Material>> = HashMap::new();
@@ -137,7 +140,33 @@ pub fn spawn_scene(
         materials,
         lights,
         enemies,
-        player: scene.player.clone(),
+        player: sanitize_player(&scene.player),
+    }
+}
+
+fn finite_clamped(value: f32, fallback: f32, minimum: f32, maximum: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(minimum, maximum)
+    } else {
+        fallback
+    }
+}
+
+fn finite_vec3(values: [f32; 3], fallback: Vec3, limit: f32) -> Vec3 {
+    let parsed = Vec3::from_array(values);
+    if parsed.is_finite() {
+        parsed.clamp(Vec3::splat(-limit), Vec3::splat(limit))
+    } else {
+        fallback
+    }
+}
+
+fn sanitize_player(desc: &PlayerDesc) -> PlayerDesc {
+    PlayerDesc {
+        position: finite_vec3(desc.position, Vec3::new(0.0, 2.0, 5.0), 100_000.0).to_array(),
+        height: finite_clamped(desc.height, 1.6, 0.8, 3.0),
+        move_speed: finite_clamped(desc.move_speed, 8.0, 0.5, 30.0),
+        mouse_sensitivity: finite_clamped(desc.mouse_sensitivity, 0.002, 0.0001, 0.02),
     }
 }
 
@@ -161,10 +190,17 @@ fn build_mesh(source: &MeshSource) -> Mesh {
 fn build_material(desc: &MaterialDesc) -> Material {
     Material {
         name: desc.name.clone(),
-        albedo_factor: [desc.color[0], desc.color[1], desc.color[2], desc.alpha],
-        metallic: desc.metallic,
-        roughness: desc.roughness,
-        emissive_factor: desc.emissive,
+        albedo_factor: [
+            finite_clamped(desc.color[0], 0.5, 0.0, 1.0),
+            finite_clamped(desc.color[1], 0.5, 0.0, 1.0),
+            finite_clamped(desc.color[2], 0.5, 0.0, 1.0),
+            finite_clamped(desc.alpha, 1.0, 0.0, 1.0),
+        ],
+        metallic: finite_clamped(desc.metallic, 0.0, 0.0, 1.0),
+        roughness: finite_clamped(desc.roughness, 0.5, 0.02, 1.0),
+        emissive_factor: desc
+            .emissive
+            .map(|value| finite_clamped(value, 0.0, 0.0, 100.0)),
         albedo_map: None,
         normal_map: None,
         metallic_roughness_map: None,
@@ -178,13 +214,30 @@ fn build_light(desc: &LightDesc) -> Light {
             direction,
             color,
             intensity,
-        } => Light::directional(Vec3::from_array(*direction), *color, *intensity),
+        } => {
+            let direction = finite_vec3(*direction, Vec3::new(0.4, -1.0, 0.2), 1_000.0);
+            let direction = if direction.length_squared() > 1.0e-8 {
+                direction.normalize()
+            } else {
+                Vec3::NEG_Y
+            };
+            Light::directional(
+                direction,
+                color.map(|value| finite_clamped(value, 1.0, 0.0, 10.0)),
+                finite_clamped(*intensity, 1.0, 0.0, 100_000.0),
+            )
+        }
         LightDesc::Point {
             position,
             color,
             intensity,
             range,
-        } => Light::point(Vec3::from_array(*position), *color, *intensity, *range),
+        } => Light::point(
+            finite_vec3(*position, Vec3::ZERO, 100_000.0),
+            color.map(|value| finite_clamped(value, 1.0, 0.0, 10.0)),
+            finite_clamped(*intensity, 1.0, 0.0, 100_000.0),
+            finite_clamped(*range, 10.0, 0.1, 100_000.0),
+        ),
         LightDesc::Spot {
             position,
             direction,
@@ -193,30 +246,51 @@ fn build_light(desc: &LightDesc) -> Light {
             range,
             inner_angle,
             outer_angle,
-        } => Light::spot(
-            Vec3::from_array(*position),
-            Vec3::from_array(*direction),
-            *color,
-            *intensity,
-            *range,
-            *inner_angle,
-            *outer_angle,
-        ),
+        } => {
+            let inner_angle = finite_clamped(
+                *inner_angle,
+                20.0_f32.to_radians(),
+                0.0,
+                std::f32::consts::FRAC_PI_2,
+            );
+            let outer_angle = finite_clamped(
+                *outer_angle,
+                35.0_f32.to_radians(),
+                inner_angle,
+                std::f32::consts::FRAC_PI_2,
+            );
+            Light::spot(
+                finite_vec3(*position, Vec3::ZERO, 100_000.0),
+                finite_vec3(*direction, Vec3::NEG_Y, 1_000.0).normalize_or_zero(),
+                color.map(|value| finite_clamped(value, 1.0, 0.0, 10.0)),
+                finite_clamped(*intensity, 1.0, 0.0, 100_000.0),
+                finite_clamped(*range, 10.0, 0.1, 100_000.0),
+                inner_angle,
+                outer_angle,
+            )
+        }
     }
 }
 
 fn build_transform(desc: &TransformDesc) -> Transform {
-    let [rx, ry, rz] = desc.rotation;
+    let [rx, ry, rz] = desc
+        .rotation
+        .map(|angle| finite_clamped(angle, 0.0, -360_000.0, 360_000.0));
     let rotation = Quat::from_euler(
         EulerRot::XYZ,
         rx.to_radians(),
         ry.to_radians(),
         rz.to_radians(),
     );
+    let scale = desc.scale.map(|axis| {
+        let axis = if axis.is_finite() { axis } else { 1.0 };
+        let sign = if axis.is_sign_negative() { -1.0 } else { 1.0 };
+        sign * axis.abs().clamp(0.001, 10_000.0)
+    });
     Transform::new(
-        Vec3::from_array(desc.position),
+        finite_vec3(desc.position, Vec3::ZERO, 100_000.0),
         rotation,
-        Vec3::from_array(desc.scale),
+        Vec3::from_array(scale),
     )
 }
 
@@ -300,14 +374,20 @@ fn spawn_entity(
     }
 
     if let Some(physics_desc) = &desc.physics {
-        attach_physics(entity, physics_desc, &transform, world, physics);
+        let is_door = matches!(
+            desc.interaction.as_ref(),
+            Some(super::InteractionDesc::Door { .. })
+        );
+        attach_physics(entity, physics_desc, &transform, is_door, world, physics);
     }
     if let Some(super::InteractionDesc::Door {
         open_rotation,
+        hinge_offset,
         speed,
     }) = &desc.interaction
     {
-        let [rx, ry, rz] = *open_rotation;
+        let [rx, ry, rz] =
+            open_rotation.map(|angle| finite_clamped(angle, 0.0, -360_000.0, 360_000.0));
         let relative = Quat::from_euler(
             EulerRot::XYZ,
             rx.to_radians(),
@@ -317,11 +397,22 @@ fn spawn_entity(
         world.add_component(
             entity,
             ToggleDoor {
+                closed_position: transform.position,
                 closed_rotation: transform.rotation,
                 open_rotation: transform.rotation * relative,
+                hinge_offset: finite_vec3(*hinge_offset, Vec3::ZERO, 10_000.0),
                 open: false,
                 progress: 0.0,
-                speed: *speed,
+                speed: speed.clamp(0.1, 20.0),
+            },
+        );
+    }
+    if let Some(super::InteractionDesc::Explosive { radius, impulse }) = &desc.interaction {
+        world.add_component(
+            entity,
+            Explosive {
+                radius: finite_clamped(*radius, 5.0, 1.0, 20.0),
+                impulse: finite_clamped(*impulse, 18.0, 1.0, 80.0),
             },
         );
     }
@@ -331,22 +422,30 @@ fn attach_physics(
     entity: Entity,
     desc: &PhysicsDesc,
     transform: &Transform,
+    kinematic: bool,
     world: &mut EngineWorld,
     physics: &mut PhysicsWorld,
 ) {
     let shape = build_shape(&desc.shape);
     let collider = shape.to_rapier_collider_with_material(surface_material(&desc.surface));
-    let is_static = desc.mass <= 0.0;
-    let (rb, col) = if is_static {
+    let mass = if desc.mass.is_finite() {
+        desc.mass.clamp(0.0, 100_000.0)
+    } else {
+        0.0
+    };
+    let is_static = mass <= 0.0;
+    let (rb, col) = if kinematic {
+        physics.add_kinematic_body(transform.position, collider)
+    } else if is_static {
         physics.add_static_body(transform.position, collider)
     } else {
-        physics.add_dynamic_body(transform.position, collider, desc.mass)
+        physics.add_dynamic_body(transform.position, collider, mass)
     };
     physics.set_body_rotation(rb, transform.rotation);
-    world.add_component(entity, PhysicsBody::new(rb, col, is_static));
+    world.add_component(entity, PhysicsBody::new(rb, col, is_static || kinematic));
     physics.register_entity(col, entity);
 
-    let impulse = Vec3::from_array(desc.initial_impulse);
+    let impulse = finite_vec3(desc.initial_impulse, Vec3::ZERO, 10_000.0);
     if impulse.length_squared() > 0.0 {
         physics.apply_impulse(rb, impulse);
     }
@@ -365,12 +464,26 @@ fn spawn_enemies(
         .iter()
         .copied()
         .map(Vec3::from_array)
+        .filter(|position| position.is_finite())
         .collect();
     spawner.waypoints = desc
         .waypoints
         .iter()
         .copied()
         .map(Vec3::from_array)
+        .filter(|position| position.is_finite())
+        .collect();
+    spawner.patrol_routes = desc
+        .routes
+        .iter()
+        .map(|route| {
+            route
+                .iter()
+                .copied()
+                .map(Vec3::from_array)
+                .filter(|position| position.is_finite())
+                .collect()
+        })
         .collect();
     spawner.enemy_mesh = meshes.get(&desc.mesh).copied();
     spawner.enemy_material = materials.get(&desc.material).copied();
@@ -384,4 +497,59 @@ fn spawn_enemies(
         );
     }
     spawner.spawn_enemies(world, physics)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_light, build_material, build_transform, sanitize_player};
+    use crate::game::scene::{LightDesc, MaterialDesc, PlayerDesc, TransformDesc};
+
+    #[test]
+    fn invalid_authored_values_are_sanitized_before_runtime() {
+        let player = sanitize_player(&PlayerDesc {
+            position: [f32::NAN, 2.0, 3.0],
+            height: f32::NEG_INFINITY,
+            move_speed: -4.0,
+            mouse_sensitivity: f32::NAN,
+        });
+        assert!(player.position.into_iter().all(f32::is_finite));
+        assert!((0.8..=3.0).contains(&player.height));
+        assert!(player.move_speed > 0.0);
+        assert!(player.mouse_sensitivity > 0.0);
+
+        let transform = build_transform(&TransformDesc {
+            position: [f32::INFINITY, 0.0, 0.0],
+            rotation: [0.0, f32::NAN, 0.0],
+            scale: [0.0, f32::NAN, -f32::INFINITY],
+        });
+        assert!(transform.position.is_finite());
+        assert!(transform.rotation.is_finite());
+        assert!(transform.scale.is_finite());
+        assert!(transform.scale.abs().min_element() >= 0.001);
+
+        let material = build_material(&MaterialDesc {
+            name: "invalid".to_string(),
+            color: [f32::NAN, -2.0, 9.0],
+            alpha: f32::NAN,
+            roughness: f32::INFINITY,
+            metallic: -4.0,
+            emissive: [f32::NAN, -1.0, 999.0],
+        });
+        assert!(material.albedo_factor.iter().all(|value| value.is_finite()));
+        assert!((0.0..=1.0).contains(&material.metallic));
+        assert!((0.02..=1.0).contains(&material.roughness));
+        assert!(material
+            .emissive_factor
+            .iter()
+            .all(|value| value.is_finite()));
+
+        let light = build_light(&LightDesc::Directional {
+            direction: [0.0, 0.0, 0.0],
+            color: [f32::NAN, 1.0, 1.0],
+            intensity: f32::NAN,
+        });
+        assert!(light.position.is_finite());
+        assert!(light.color.iter().all(|value| value.is_finite()));
+        assert!(light.intensity.is_finite());
+    }
 }

@@ -22,6 +22,10 @@ pub struct MouseLocked(pub bool);
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MuzzleFlashTimer(pub f32);
 
+/// Short HUD confirmation pulse after a raycast hits an entity or surface.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HitMarkerTimer(pub f32);
+
 /// Runtime settings menu state.
 #[derive(Debug, Clone, Default)]
 pub struct MenuState(pub crate::game::PauseMenu);
@@ -117,9 +121,12 @@ pub fn register_default_systems(schedule: &mut Schedule) {
     schedule.add_system(Stage::Update, player::input_system);
     schedule.add_system(Stage::Update, weapon::update_system);
     schedule.add_system(Stage::Update, sandbox::system);
+    schedule.add_system(Stage::FixedUpdate, player::fixed_update_system);
+    schedule.add_system(Stage::FixedUpdate, enemy::system);
+    schedule.add_system(Stage::FixedUpdate, interaction::fixed_update);
+    schedule.add_system(Stage::FixedUpdate, sandbox::fixed_update);
     schedule.add_system(Stage::FixedUpdate, physics_sync::step_physics);
     schedule.add_system(Stage::LateUpdate, player::sync_system);
-    schedule.add_system(Stage::LateUpdate, enemy::system);
     schedule.add_system(Stage::LateUpdate, enemy::feedback_system);
     schedule.add_system(Stage::Render, render::system);
     schedule.add_system(Stage::PostRender, input::system);

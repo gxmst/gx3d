@@ -3,6 +3,37 @@ use glam::{Vec2, Vec3};
 
 pub struct ProceduralGenerator;
 
+const MIN_DIMENSION: f32 = 0.001;
+const MAX_DIMENSION: f32 = 10_000.0;
+const DEFAULT_PLANE_SIZE: f32 = 1.0;
+const DEFAULT_SPHERE_RADIUS: f32 = 0.5;
+const DEFAULT_CYLINDER_RADIUS: f32 = 0.5;
+const DEFAULT_CYLINDER_HEIGHT: f32 = 1.0;
+
+fn safe_dimension(value: f32, fallback: f32) -> f32 {
+    if value.is_finite() && value > 0.0 {
+        value.clamp(MIN_DIMENSION, MAX_DIMENSION)
+    } else {
+        fallback
+    }
+}
+
+fn safe_plane_subdivisions(subdivisions: u32) -> u32 {
+    subdivisions.clamp(1, 512)
+}
+
+fn safe_sphere_segments(segments: u32) -> u32 {
+    segments.clamp(3, 256)
+}
+
+fn safe_sphere_rings(rings: u32) -> u32 {
+    rings.clamp(2, 128)
+}
+
+fn safe_cylinder_segments(segments: u32) -> u32 {
+    segments.clamp(3, 256)
+}
+
 impl ProceduralGenerator {
     pub fn create_cube() -> Mesh {
         let vertices = vec![
@@ -51,8 +82,11 @@ impl ProceduralGenerator {
     }
 
     pub fn create_plane(size: f32, subdivisions: u32) -> Mesh {
-        let mut vertices = Vec::new();
-        let mut indices = Vec::new();
+        let size = safe_dimension(size, DEFAULT_PLANE_SIZE);
+        let subdivisions = safe_plane_subdivisions(subdivisions);
+        let vertices_per_side = subdivisions as usize + 1;
+        let mut vertices = Vec::with_capacity(vertices_per_side * vertices_per_side);
+        let mut indices = Vec::with_capacity(subdivisions as usize * subdivisions as usize * 6);
 
         let step = size / subdivisions as f32;
         let half = size / 2.0;
@@ -93,8 +127,18 @@ impl ProceduralGenerator {
     }
 
     pub fn create_sphere(segments: u32, rings: u32) -> Mesh {
-        let mut vertices = Vec::new();
-        let mut indices = Vec::new();
+        Self::create_sphere_with_radius(DEFAULT_SPHERE_RADIUS, segments, rings)
+    }
+
+    /// Create a UV sphere while constraining user-authored dimensions and
+    /// tessellation to finite, useful values. The regular `create_sphere`
+    /// entry point keeps the historical unit-diameter behavior.
+    pub fn create_sphere_with_radius(radius: f32, segments: u32, rings: u32) -> Mesh {
+        let radius = safe_dimension(radius, DEFAULT_SPHERE_RADIUS);
+        let segments = safe_sphere_segments(segments);
+        let rings = safe_sphere_rings(rings);
+        let mut vertices = Vec::with_capacity((segments as usize + 1) * (rings as usize + 1));
+        let mut indices = Vec::with_capacity(segments as usize * rings as usize * 6);
 
         for ring in 0..=rings {
             let phi = std::f32::consts::PI * ring as f32 / rings as f32;
@@ -110,7 +154,7 @@ impl ProceduralGenerator {
                 let normal = position.normalize();
                 let uv = Vec2::new(seg as f32 / segments as f32, ring as f32 / rings as f32);
 
-                vertices.push(Vertex::new(position * 0.5, normal, uv));
+                vertices.push(Vertex::new(position * radius, normal, uv));
             }
         }
 
@@ -135,20 +179,34 @@ impl ProceduralGenerator {
     }
 
     pub fn create_cylinder(segments: u32) -> Mesh {
-        let mut vertices = Vec::new();
-        let mut indices = Vec::new();
+        Self::create_cylinder_with_dimensions(
+            DEFAULT_CYLINDER_RADIUS,
+            DEFAULT_CYLINDER_HEIGHT,
+            segments,
+        )
+    }
+
+    /// Create a Y-aligned cylinder with guarded dimensions. Keeping this
+    /// validation at the generator boundary protects every current and future
+    /// caller, including data-driven scenes.
+    pub fn create_cylinder_with_dimensions(radius: f32, height: f32, segments: u32) -> Mesh {
+        let radius = safe_dimension(radius, DEFAULT_CYLINDER_RADIUS);
+        let half_height = safe_dimension(height, DEFAULT_CYLINDER_HEIGHT) * 0.5;
+        let segments = safe_cylinder_segments(segments);
+        let mut vertices = Vec::with_capacity(4 * segments as usize + 6);
+        let mut indices = Vec::with_capacity(12 * segments as usize);
 
         // Caps use their own vertices so their normals stay vertical.
         let top_center = vertices.len() as u32;
         vertices.push(Vertex::new(
-            Vec3::new(0.0, 0.5, 0.0),
+            Vec3::new(0.0, half_height, 0.0),
             Vec3::Y,
             Vec2::splat(0.5),
         ));
         for i in 0..=segments {
             let a = std::f32::consts::TAU * i as f32 / segments as f32;
             vertices.push(Vertex::new(
-                Vec3::new(a.cos() * 0.5, 0.5, a.sin() * 0.5),
+                Vec3::new(a.cos() * radius, half_height, a.sin() * radius),
                 Vec3::Y,
                 Vec2::new(a.cos() * 0.5 + 0.5, a.sin() * 0.5 + 0.5),
             ));
@@ -159,14 +217,14 @@ impl ProceduralGenerator {
 
         let bottom_center = vertices.len() as u32;
         vertices.push(Vertex::new(
-            Vec3::new(0.0, -0.5, 0.0),
+            Vec3::new(0.0, -half_height, 0.0),
             -Vec3::Y,
             Vec2::splat(0.5),
         ));
         for i in 0..=segments {
             let a = std::f32::consts::TAU * i as f32 / segments as f32;
             vertices.push(Vertex::new(
-                Vec3::new(a.cos() * 0.5, -0.5, a.sin() * 0.5),
+                Vec3::new(a.cos() * radius, -half_height, a.sin() * radius),
                 -Vec3::Y,
                 Vec2::new(a.cos() * 0.5 + 0.5, a.sin() * 0.5 + 0.5),
             ));
@@ -187,12 +245,12 @@ impl ProceduralGenerator {
             let normal = Vec3::new(a.cos(), 0.0, a.sin());
             let u = i as f32 / segments as f32;
             vertices.push(Vertex::new(
-                Vec3::new(normal.x * 0.5, 0.5, normal.z * 0.5),
+                Vec3::new(normal.x * radius, half_height, normal.z * radius),
                 normal,
                 Vec2::new(u, 0.0),
             ));
             vertices.push(Vertex::new(
-                Vec3::new(normal.x * 0.5, -0.5, normal.z * 0.5),
+                Vec3::new(normal.x * radius, -half_height, normal.z * radius),
                 normal,
                 Vec2::new(u, 1.0),
             ));
@@ -517,5 +575,77 @@ fn add_box(vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>, center: Vec3, hal
             vertex_base + 3,
             vertex_base,
         ]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_valid_mesh(mesh: &Mesh) {
+        assert!(!mesh.vertices.is_empty());
+        assert!(!mesh.indices.is_empty());
+        assert!(mesh
+            .indices
+            .iter()
+            .all(|index| *index < mesh.vertices.len() as u32));
+        assert!(mesh.vertices.iter().all(|vertex| {
+            vertex.position.iter().all(|value| value.is_finite())
+                && vertex.normal.iter().all(|value| value.is_finite())
+                && vertex.uv.iter().all(|value| value.is_finite())
+        }));
+    }
+
+    #[test]
+    fn tessellation_parameters_are_bounded() {
+        assert_eq!(safe_plane_subdivisions(0), 1);
+        assert_eq!(safe_plane_subdivisions(u32::MAX), 512);
+        assert_eq!(safe_sphere_segments(0), 3);
+        assert_eq!(safe_sphere_segments(u32::MAX), 256);
+        assert_eq!(safe_sphere_rings(0), 2);
+        assert_eq!(safe_sphere_rings(u32::MAX), 128);
+        assert_eq!(safe_cylinder_segments(0), 3);
+        assert_eq!(safe_cylinder_segments(u32::MAX), 256);
+    }
+
+    #[test]
+    fn invalid_dimensions_use_safe_finite_values() {
+        assert_eq!(safe_dimension(f32::NAN, 1.0), 1.0);
+        assert_eq!(safe_dimension(f32::INFINITY, 1.0), 1.0);
+        assert_eq!(safe_dimension(0.0, 1.0), 1.0);
+        assert_eq!(safe_dimension(-3.0, 1.0), 1.0);
+        assert_eq!(safe_dimension(f32::MAX, 1.0), MAX_DIMENSION);
+        assert_eq!(safe_dimension(f32::MIN_POSITIVE, 1.0), MIN_DIMENSION);
+    }
+
+    #[test]
+    fn plane_with_invalid_input_remains_renderable() {
+        let mesh = ProceduralGenerator::create_plane(f32::NAN, 0);
+
+        assert_eq!(mesh.vertices.len(), 4);
+        assert_eq!(mesh.indices.len(), 6);
+        assert_valid_mesh(&mesh);
+        assert!(mesh.vertices.iter().any(|vertex| vertex.position[0] != 0.0));
+        assert!(mesh.vertices.iter().any(|vertex| vertex.position[2] != 0.0));
+    }
+
+    #[test]
+    fn sphere_with_invalid_input_remains_renderable() {
+        let mesh = ProceduralGenerator::create_sphere_with_radius(f32::NEG_INFINITY, 0, 0);
+
+        assert_eq!(mesh.vertices.len(), 12);
+        assert_eq!(mesh.indices.len(), 36);
+        assert_valid_mesh(&mesh);
+    }
+
+    #[test]
+    fn cylinder_with_invalid_input_remains_renderable() {
+        let mesh = ProceduralGenerator::create_cylinder_with_dimensions(f32::NAN, 0.0, 0);
+
+        assert_eq!(mesh.vertices.len(), 18);
+        assert_eq!(mesh.indices.len(), 36);
+        assert_valid_mesh(&mesh);
+        assert!(mesh.vertices.iter().any(|vertex| vertex.position[1] > 0.0));
+        assert!(mesh.vertices.iter().any(|vertex| vertex.position[1] < 0.0));
     }
 }

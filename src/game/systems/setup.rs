@@ -1,4 +1,4 @@
-use crate::asset::{AssetManager, Handle, Material};
+use crate::asset::{AssetManager, Handle, Material, Mesh, ProceduralGenerator};
 use crate::core::{EngineWorld, Resources, Schedule, Stage};
 use crate::game::scene::{spawn_scene, Scene};
 use crate::game::{Player, Weapon, WeaponModel};
@@ -8,8 +8,8 @@ use glam::Vec3;
 use std::collections::HashMap;
 
 use super::{
-    Enemies, EnemyFlashMaterial, MenuState, MouseLocked, MuzzleFlashTimer, PhysicsDebugState,
-    PlayerBody, SceneLights, TextureViews, ViewModeState, WeaponFeedbackAssets,
+    Enemies, EnemyFlashMaterial, HitMarkerTimer, MenuState, MouseLocked, MuzzleFlashTimer,
+    PhysicsDebugState, PlayerBody, SceneLights, TextureViews, ViewModeState, WeaponFeedbackAssets,
 };
 
 /// The default scene, compiled into the binary as a fallback so the engine can
@@ -94,29 +94,29 @@ fn setup_scene(world: &mut EngineWorld, resources: &Resources) {
         player.camera_controller.move_speed = spawned.player.move_speed;
         player.camera_controller.mouse_sensitivity = spawned.player.mouse_sensitivity;
         player.height = spawned.player.height;
+        player.set_spawn_position(Vec3::from_array(spawned.player.position));
     }
 
     // === Player physics body (engine plumbing, not scene content) ===
     let player_rb = {
         let camera = resources.expect::<Camera>();
+        let player_height = spawned.player.height.max(0.8);
+        let radius = (player_height * 0.1875).clamp(0.28, 0.36);
         let collider = PhysicsShape::Capsule {
-            radius: 0.3,
-            half_height: 0.5,
+            radius,
+            half_height: (player_height * 0.5 - radius).max(0.1),
         };
-        let (rb, _col) = physics_world.add_dynamic_body(
+        let (rb, _col) = physics_world.add_kinematic_body(
             camera.position,
             collider.to_rapier_collider_with_material(PhysicsMaterial {
                 friction: 0.0,
                 restitution: 0.0,
             }),
-            1.0,
         );
         if let Some(rb_ref) = physics_world.rigid_body_set.get_mut(rb) {
             rb_ref.lock_rotations(true, true);
-            rb_ref.set_dominance_group(10);
-            rb_ref.set_linear_damping(0.08);
             rb_ref.enable_ccd(true);
-            rb_ref.set_soft_ccd_prediction(0.25);
+            rb_ref.set_soft_ccd_prediction(0.2);
         }
         rb
     };
@@ -124,13 +124,19 @@ fn setup_scene(world: &mut EngineWorld, resources: &Resources) {
     resources.insert(MouseLocked(true));
     resources.insert(MenuState::default());
     resources.insert(MuzzleFlashTimer(0.0));
+    resources.insert(HitMarkerTimer::default());
     resources.insert(ViewModeState::default());
     resources.insert(PhysicsDebugState::default());
     resources.insert(crate::game::InteractionFocus::default());
 
     // === Weapon (engine plumbing) ===
     // The rifle mesh comes from the scene; its material is engine-defined.
-    let rifle_mesh = spawned.mesh("rifle").unwrap_or_default();
+    let rifle_mesh = mesh_or_fallback(
+        &mut asset_manager,
+        spawned.mesh("rifle"),
+        "rifle",
+        ProceduralGenerator::create_rifle,
+    );
     let weapon_material = asset_manager
         .materials
         .insert(Material::metal([0.18, 0.2, 0.22]));
@@ -158,9 +164,22 @@ fn setup_scene(world: &mut EngineWorld, resources: &Resources) {
         metallic_roughness_map: None,
         emissive_map: None,
     });
-    let cube_mesh = spawned.mesh("cube").unwrap_or_default();
-    let sphere_mesh = spawned.mesh("sphere").unwrap_or_default();
-    let cylinder_mesh = spawned.mesh("cylinder").unwrap_or(cube_mesh);
+    let cube_mesh = mesh_or_fallback(
+        &mut asset_manager,
+        spawned.mesh("cube"),
+        "cube",
+        ProceduralGenerator::create_cube,
+    );
+    let sphere_mesh =
+        mesh_or_fallback(&mut asset_manager, spawned.mesh("sphere"), "sphere", || {
+            ProceduralGenerator::create_sphere(32, 16)
+        });
+    let cylinder_mesh = mesh_or_fallback(
+        &mut asset_manager,
+        spawned.mesh("cylinder"),
+        "cylinder",
+        || ProceduralGenerator::create_cylinder(32),
+    );
     resources.insert(WeaponFeedbackAssets {
         bullet_hole_mesh: cylinder_mesh,
         bullet_hole_material,
@@ -187,13 +206,33 @@ fn setup_scene(world: &mut EngineWorld, resources: &Resources) {
     resources.insert(EnemyFlashMaterial(enemy_flash_material));
 
     // === Physics sandbox shared handles (for runtime G/B/H spawning) ===
+    let box_material =
+        material_or_fallback(&mut asset_manager, spawned.material("box"), "box", || {
+            solid_material("Fallback Box", [0.58, 0.36, 0.18], 0.78, 0.0)
+        });
+    let bouncy_material = material_or_fallback(
+        &mut asset_manager,
+        spawned.material("bouncy_rubber"),
+        "bouncy_rubber",
+        || solid_material("Fallback Bouncy Rubber", [0.82, 0.12, 0.16], 0.88, 0.0),
+    );
+    let ice_material =
+        material_or_fallback(&mut asset_manager, spawned.material("ice"), "ice", || {
+            solid_material("Fallback Ice", [0.36, 0.72, 0.96], 0.16, 0.0)
+        });
+    let heavy_material = material_or_fallback(
+        &mut asset_manager,
+        spawned.material("heavy_metal"),
+        "heavy_metal",
+        || solid_material("Fallback Heavy Metal", [0.22, 0.25, 0.28], 0.32, 0.92),
+    );
     let physics_sandbox = crate::physics::sandbox::PhysicsSandbox {
         cube_mesh,
         sphere_mesh,
-        box_material: spawned.material("box").unwrap_or_default(),
-        bouncy_material: spawned.material("bouncy_rubber").unwrap_or_default(),
-        ice_material: spawned.material("ice").unwrap_or_default(),
-        heavy_material: spawned.material("heavy_metal").unwrap_or_default(),
+        box_material,
+        bouncy_material,
+        ice_material,
+        heavy_material,
         ..Default::default()
     };
     resources.insert(physics_sandbox);
@@ -238,6 +277,9 @@ fn setup_scene(world: &mut EngineWorld, resources: &Resources) {
     };
     resources.insert(audio_system);
 
+    // Build Rapier's broad phase before the first character-controller tick,
+    // and let initially overlapping dynamic props settle by one fixed step.
+    physics_world.step();
     resources.insert(asset_manager);
     resources.insert(physics_world);
 }
@@ -253,5 +295,111 @@ fn solid_material(name: &str, color: [f32; 3], roughness: f32, metallic: f32) ->
         normal_map: None,
         metallic_roughness_map: None,
         emissive_map: None,
+    }
+}
+
+fn mesh_or_fallback(
+    assets: &mut AssetManager,
+    scene_handle: Option<Handle<Mesh>>,
+    name: &str,
+    create_fallback: impl FnOnce() -> Mesh,
+) -> Handle<Mesh> {
+    match scene_handle {
+        Some(handle) if assets.meshes.get(handle).is_some() => handle,
+        Some(handle) => {
+            log::warn!(
+                "Scene mesh `{name}` points to missing asset handle {}; generating fallback",
+                handle.id
+            );
+            assets.meshes.insert(create_fallback())
+        }
+        None => {
+            log::warn!("Scene mesh `{name}` is unavailable; generating fallback");
+            assets.meshes.insert(create_fallback())
+        }
+    }
+}
+
+fn material_or_fallback(
+    assets: &mut AssetManager,
+    scene_handle: Option<Handle<Material>>,
+    name: &str,
+    create_fallback: impl FnOnce() -> Material,
+) -> Handle<Material> {
+    match scene_handle {
+        Some(handle) if assets.materials.get(handle).is_some() => handle,
+        Some(handle) => {
+            log::warn!(
+                "Scene material `{name}` points to missing asset handle {}; generating fallback",
+                handle.id
+            );
+            assets.materials.insert(create_fallback())
+        }
+        None => {
+            log::warn!("Scene material `{name}` is unavailable; generating fallback");
+            assets.materials.insert(create_fallback())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_mesh_gets_a_real_fallback_handle() {
+        let mut assets = AssetManager::new();
+
+        let handle = mesh_or_fallback(&mut assets, None, "cube", ProceduralGenerator::create_cube);
+
+        let mesh = assets.meshes.get(handle).expect("fallback mesh must exist");
+        assert_eq!(mesh.name, "Cube");
+        assert!(!mesh.vertices.is_empty());
+        assert!(!mesh.indices.is_empty());
+    }
+
+    #[test]
+    fn dangling_mesh_handle_is_replaced() {
+        let mut assets = AssetManager::new();
+
+        let handle = mesh_or_fallback(&mut assets, Some(Handle::new(99)), "sphere", || {
+            ProceduralGenerator::create_sphere(8, 4)
+        });
+
+        assert_ne!(handle.id, 99);
+        assert!(assets.meshes.get(handle).is_some());
+    }
+
+    #[test]
+    fn missing_material_gets_a_real_fallback_handle() {
+        let mut assets = AssetManager::new();
+
+        let handle = material_or_fallback(&mut assets, None, "box", || {
+            solid_material("Fallback Box", [0.5, 0.3, 0.1], 0.8, 0.0)
+        });
+
+        let material = assets
+            .materials
+            .get(handle)
+            .expect("fallback material must exist");
+        assert_eq!(material.name, "Fallback Box");
+        assert!(material.albedo_factor.iter().all(|value| value.is_finite()));
+    }
+
+    #[test]
+    fn existing_asset_handles_are_preserved() {
+        let mut assets = AssetManager::new();
+        let existing_mesh = assets.meshes.insert(ProceduralGenerator::create_cube());
+        let existing_material = assets.materials.insert(Material::gray());
+
+        let mesh = mesh_or_fallback(&mut assets, Some(existing_mesh), "cube", || {
+            panic!("mesh fallback must not run")
+        });
+        let material = material_or_fallback(&mut assets, Some(existing_material), "box", || {
+            panic!("material fallback must not run")
+        });
+
+        assert_eq!(mesh.id, existing_mesh.id);
+        assert_eq!(material.id, existing_material.id);
     }
 }

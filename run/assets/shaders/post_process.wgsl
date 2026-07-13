@@ -58,8 +58,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let hdr = textureSample(t_hdr, s_hdr, in.uv).rgb;
     let bloom = textureSample(t_bloom, s_bloom, in.uv).rgb;
     let ao = textureSample(t_ao, s_ao, in.uv).r;
-    let exposed = (hdr + bloom) * params.exposure.x * ao;
+    let softened_ao = mix(1.0, ao, 0.38);
+    let exposed = (hdr + bloom * 0.16) * params.exposure.x * softened_ao;
     let mapped = aces_tone_map(exposed);
-    let gamma = pow(mapped, vec3<f32>(1.0 / 2.2));
-    return vec4<f32>(gamma, 1.0);
+    // The swapchain uses an sRGB format, so conversion is performed by the
+    // render target. Applying gamma here as well caused the washed film veil.
+    return vec4<f32>(mapped, 1.0);
 }

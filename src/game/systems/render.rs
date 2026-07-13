@@ -2,12 +2,14 @@ use crate::asset::{AssetManager, Handle, Mesh};
 use crate::core::{EngineWorld, Resources, Time};
 use crate::game::WeaponModel;
 use crate::input::InputState;
-use crate::renderer::bind_groups::LightData;
-use crate::renderer::{Camera, LightType, RenderMesh, Renderer};
-use glam::{Mat4, Vec2};
+use crate::renderer::bind_groups::{LightData, MAX_LIGHTS};
+use crate::renderer::{
+    Camera, HudMode, HudState, Light, LightType, OverlayRuntimeInfo, RenderMesh, Renderer,
+};
+use glam::{Mat4, Vec2, Vec3};
 use winit::keyboard::KeyCode;
 
-use super::{MenuState, MuzzleFlashTimer, SceneLights, WeaponFeedbackAssets};
+use super::{HitMarkerTimer, MenuState, MuzzleFlashTimer, SceneLights, WeaponFeedbackAssets};
 
 struct DrawItem {
     mesh: Handle<Mesh>,
@@ -54,35 +56,9 @@ pub fn system(world: &mut EngineWorld, resources: &Resources) {
     let sun_to = glam::Vec3::new(day_phase.cos(), day_phase.sin(), 0.28).normalize();
     let daylight = (sun_to.y * 1.8 + 0.15).clamp(0.04, 1.0);
 
-    // Convert scene lights to GPU format.
-    let light_data: Vec<LightData> = scene_lights
-        .0
-        .iter()
-        .map(|l| {
-            let lt = match l.light_type {
-                LightType::Directional => 0u32,
-                LightType::Point => 1,
-                LightType::Spot => 2,
-            };
-            let dir = if l.light_type == LightType::Directional {
-                -sun_to
-            } else {
-                glam::Vec3::ZERO
-            };
-            LightData {
-                position: l.position.into(),
-                light_type: lt,
-                color: l.color,
-                intensity: if l.light_type == LightType::Directional {
-                    l.intensity * daylight
-                } else {
-                    l.intensity
-                },
-                direction: dir.into(),
-                range: l.range,
-            }
-        })
-        .collect();
+    // The shader accepts eight lights. Always retain directional lighting and
+    // fill the remaining slots with local lights nearest the active camera.
+    let light_data = select_light_data(&scene_lights.0, camera.position, sun_to, daylight);
 
     // Resolve and clone cached material bind groups up front.
     let mut draws: Vec<DrawItem> = Vec::new();
@@ -185,7 +161,7 @@ fn render_frame(
         .iter()
         .find(|l| l.light_type == LightType::Directional);
     let light_space_matrix = directional
-        .map(|_| compute_light_space_matrix(-sun_to))
+        .map(|_| compute_light_space_matrix(-sun_to, camera.position, camera.forward()))
         .unwrap_or(Mat4::IDENTITY);
 
     // Shadow pass: render world objects only.
@@ -282,15 +258,71 @@ fn render_frame(
         &output_view,
     );
     draw_physics_debug(resources, &renderer, &camera, &mut encoder, &output_view);
+
+    let view_mode = resources
+        .get::<super::ViewModeState>()
+        .map(|state| state.mode)
+        .unwrap_or(super::ViewMode::Fps);
+    let physics_debug = resources
+        .get::<super::PhysicsDebugState>()
+        .map(|state| *state)
+        .unwrap_or_default();
+    let (holding_object, hold_distance) = resources
+        .get::<crate::physics::PhysicsSandbox>()
+        .map(|sandbox| (sandbox.held_body.is_some(), sandbox.hold_distance))
+        .unwrap_or((false, 0.0));
+    let dynamic_body_count = resources
+        .get::<crate::physics::PhysicsWorld>()
+        .map(|physics| {
+            physics
+                .rigid_body_set
+                .iter()
+                .filter(|(_, body)| body.is_dynamic())
+                .count()
+        })
+        .unwrap_or(0);
+    let runtime = OverlayRuntimeInfo {
+        mode: match view_mode {
+            super::ViewMode::Fps => HudMode::Fps,
+            super::ViewMode::God => HudMode::God,
+        },
+        fps: time.fps(),
+        time_scale: time.time_scale,
+        paused: time.is_paused(),
+        debug_colliders: physics_debug.colliders,
+        debug_velocities: physics_debug.velocities,
+        debug_contacts: physics_debug.contacts,
+        camera_position: camera.position.into(),
+        light_count: scene_lights.0.len(),
+        dynamic_body_count,
+        holding_object,
+        hold_distance,
+    };
+
     if !menu_open {
         if let Some(focus) = resources.get::<crate::game::InteractionFocus>() {
+            let hud = HudState {
+                focus: &focus,
+                weapon_name: &weapon.name,
+                current_ammo: weapon.current_ammo,
+                max_ammo: weapon.max_ammo,
+                is_reloading: weapon.is_reloading,
+                reload_timer: weapon.reload_timer,
+                reload_duration: weapon.reload_duration,
+                aiming,
+                show_help,
+                hit_marker_seconds: resources
+                    .get::<HitMarkerTimer>()
+                    .map(|timer| timer.0)
+                    .unwrap_or(0.0),
+                runtime,
+            };
             renderer.overlay.borrow_mut().draw_hud(
                 &renderer.device,
                 &renderer.queue,
                 &mut encoder,
                 &output_view,
-                &focus,
-                aiming,
+                &hud,
                 renderer.surface_config.width,
                 renderer.surface_config.height,
             );
@@ -304,6 +336,7 @@ fn render_frame(
                 &mut encoder,
                 &output_view,
                 &menu.0,
+                runtime,
                 renderer.surface_config.width,
                 renderer.surface_config.height,
             );
@@ -313,10 +346,6 @@ fn render_frame(
     renderer.queue.submit(std::iter::once(encoder.finish()));
     output.present();
 
-    let view_mode = resources
-        .get::<super::ViewModeState>()
-        .map(|state| state.mode)
-        .unwrap_or(super::ViewMode::Fps);
     let mode_label = match view_mode {
         super::ViewMode::Fps => "FPS",
         super::ViewMode::God => "GOD",
@@ -328,24 +357,15 @@ fn render_frame(
     };
 
     if menu_open {
-        renderer
-            .window
-            .set_title("GxEngine | 设置菜单 | Esc 返回游戏");
+        renderer.window.set_title("GxEngine — 实验台设置");
     } else if show_help {
-        renderer.window.set_title(
-            "GxEngine Controls | V FPS/God | P Pause | . Step | [/] Speed | F3 Colliders | F4 Velocity | F5 Contacts | WASD Move | E Grab | T Push | X Freeze | Delete Remove | Esc Menu",
-        );
+        renderer.window.set_title("GxEngine — 操作指南");
     } else {
         renderer.window.set_title(&format!(
-            "GxEngine | {} | {} | {:.1} FPS | Ammo: {} | Lights: {} | Pos: ({:.1}, {:.1}, {:.1}) | Hold F: Controls",
+            "GxEngine — {} · {} · {:.0} FPS",
             mode_label,
             time_label,
             time.fps(),
-            weapon.current_ammo,
-            scene_lights.0.len(),
-            camera.position.x,
-            camera.position.y,
-            camera.position.z,
         ));
     }
 }
@@ -420,16 +440,177 @@ fn draw_physics_debug(
         );
 }
 
-fn compute_light_space_matrix(light_dir: glam::Vec3) -> Mat4 {
-    let dir = light_dir.normalize();
-    let eye = -dir * 25.0;
-    let target = glam::Vec3::ZERO;
-    let up = if dir.abs_diff_eq(glam::Vec3::Y, 1e-4) {
-        glam::Vec3::Z
+fn select_light_data(
+    lights: &[Light],
+    camera_position: Vec3,
+    sun_to: Vec3,
+    daylight: f32,
+) -> Vec<LightData> {
+    let mut selected = Vec::with_capacity(MAX_LIGHTS);
+    selected.extend(
+        lights
+            .iter()
+            .filter(|light| light.light_type == LightType::Directional)
+            .take(MAX_LIGHTS),
+    );
+
+    if selected.len() < MAX_LIGHTS {
+        let mut local_lights: Vec<_> = lights
+            .iter()
+            .enumerate()
+            .filter(|(_, light)| light.light_type != LightType::Directional)
+            .collect();
+        local_lights.sort_by(|(left_index, left), (right_index, right)| {
+            let left_distance = finite_distance_squared(left.position, camera_position);
+            let right_distance = finite_distance_squared(right.position, camera_position);
+            left_distance
+                .total_cmp(&right_distance)
+                .then_with(|| left_index.cmp(right_index))
+        });
+        selected.extend(
+            local_lights
+                .into_iter()
+                .map(|(_, light)| light)
+                .take(MAX_LIGHTS - selected.len()),
+        );
+    }
+
+    selected
+        .into_iter()
+        .map(|light| light_to_gpu(light, sun_to, daylight))
+        .collect()
+}
+
+fn finite_distance_squared(position: Vec3, camera_position: Vec3) -> f32 {
+    let distance = position.distance_squared(camera_position);
+    if distance.is_finite() {
+        distance
     } else {
-        glam::Vec3::Y
+        f32::INFINITY
+    }
+}
+
+fn light_to_gpu(light: &Light, sun_to: Vec3, daylight: f32) -> LightData {
+    let light_type = match light.light_type {
+        LightType::Directional => 0,
+        LightType::Point => 1,
+        LightType::Spot => 2,
     };
-    let view = Mat4::look_at_rh(eye, target, up);
-    let ortho = Mat4::orthographic_rh(-20.0, 20.0, -20.0, 20.0, -30.0, 30.0);
+    LightData {
+        position: light.position.into(),
+        light_type,
+        color: light.color,
+        intensity: if light.light_type == LightType::Directional {
+            light.intensity * daylight
+        } else {
+            light.intensity
+        },
+        direction: if light.light_type == LightType::Directional {
+            (-sun_to).into()
+        } else {
+            Vec3::ZERO.into()
+        },
+        range: light.range,
+    }
+}
+
+fn compute_light_space_matrix(
+    light_dir: Vec3,
+    camera_position: Vec3,
+    camera_forward: Vec3,
+) -> Mat4 {
+    const SHADOW_HALF_EXTENT: f32 = 45.0;
+    const SHADOW_MAP_RESOLUTION: f32 = 2048.0;
+    const SHADOW_FOCUS_AHEAD: f32 = 16.0;
+
+    let dir = if light_dir.length_squared() > 1e-6 && light_dir.is_finite() {
+        light_dir.normalize()
+    } else {
+        Vec3::new(-0.4, -1.0, -0.2).normalize()
+    };
+    let horizontal_forward = Vec3::new(camera_forward.x, 0.0, camera_forward.z).normalize_or_zero();
+    let target = Vec3::new(camera_position.x, 0.0, camera_position.z)
+        + horizontal_forward * SHADOW_FOCUS_AHEAD;
+    let up = if dir.dot(Vec3::Y).abs() > 0.98 {
+        Vec3::Z
+    } else {
+        Vec3::Y
+    };
+
+    // Snap the light-space center to shadow texels. This prevents the entire
+    // shadow map from shimmering when the camera moves by a few millimeters.
+    let orientation = Mat4::look_to_rh(Vec3::ZERO, dir, up);
+    let mut target_light_space = orientation.transform_point3(target);
+    let texel_size = SHADOW_HALF_EXTENT * 2.0 / SHADOW_MAP_RESOLUTION;
+    target_light_space.x = (target_light_space.x / texel_size).round() * texel_size;
+    target_light_space.y = (target_light_space.y / texel_size).round() * texel_size;
+    let snapped_target = orientation.inverse().transform_point3(target_light_space);
+
+    let eye = snapped_target - dir * 120.0;
+    let view = Mat4::look_to_rh(eye, dir, up);
+    let ortho = Mat4::orthographic_rh(
+        -SHADOW_HALF_EXTENT,
+        SHADOW_HALF_EXTENT,
+        -SHADOW_HALF_EXTENT,
+        SHADOW_HALF_EXTENT,
+        -180.0,
+        180.0,
+    );
     ortho * view
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn light_selection_keeps_directional_and_nearest_locals() {
+        let mut lights = vec![Light::directional(Vec3::new(1.0, -1.0, 0.2), [1.0; 3], 2.0)];
+        for distance in (1..=12).rev() {
+            lights.push(Light::point(
+                Vec3::new(distance as f32, 0.0, 0.0),
+                [1.0; 3],
+                1.0,
+                10.0,
+            ));
+        }
+
+        let selected = select_light_data(&lights, Vec3::ZERO, Vec3::Y, 0.5);
+        assert_eq!(selected.len(), MAX_LIGHTS);
+        assert_eq!(selected[0].light_type, 0);
+        assert!((selected[0].intensity - 1.0).abs() < 1e-6);
+        let local_x: Vec<_> = selected[1..]
+            .iter()
+            .map(|light| light.position[0] as i32)
+            .collect();
+        assert_eq!(local_x, vec![1, 2, 3, 4, 5, 6, 7]);
+    }
+
+    #[test]
+    fn shadow_matrix_follows_distant_camera_and_stays_finite() {
+        let matrix = compute_light_space_matrix(
+            Vec3::new(-0.6, -1.0, 0.3),
+            Vec3::new(240.0, 4.0, -190.0),
+            Vec3::new(0.0, 0.0, -1.0),
+        );
+        assert!(matrix.to_cols_array().into_iter().all(f32::is_finite));
+        let camera_ground = matrix.transform_point3(Vec3::new(240.0, 0.0, -190.0));
+        assert!(camera_ground.x.abs() <= 1.0);
+        assert!(camera_ground.y.abs() <= 1.0);
+    }
+
+    #[test]
+    fn shadow_texel_snapping_ignores_sub_texel_camera_jitter() {
+        let direction = Vec3::new(-0.6, -1.0, 0.3);
+        let forward = Vec3::new(0.0, 0.0, -1.0);
+        let first = compute_light_space_matrix(direction, Vec3::new(10.0, 2.0, 20.0), forward);
+        let second = compute_light_space_matrix(direction, Vec3::new(10.001, 2.0, 20.001), forward);
+        let largest_delta = first
+            .to_cols_array()
+            .into_iter()
+            .zip(second.to_cols_array())
+            .map(|(left, right)| (left - right).abs())
+            .fold(0.0, f32::max);
+        assert!(largest_delta < 1e-5, "matrix drifted by {largest_delta}");
+    }
 }
