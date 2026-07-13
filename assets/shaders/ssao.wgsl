@@ -80,11 +80,19 @@ fn normal_from_depth(uv: vec2<f32>) -> vec3<f32> {
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) f32 {
     let depth = textureSample(t_depth, s_depth, in.uv);
+    if (depth >= 0.999999) {
+        return 1.0;
+    }
     let frag_pos = position_from_depth(in.uv, depth);
     let normal = normal_from_depth(in.uv);
 
     let noise_vec = textureSample(t_noise, s_noise, in.uv * params.noise_scale).xyz;
-    let tangent = normalize(noise_vec - normal * dot(noise_vec, normal));
+    var tangent_seed = noise_vec - normal * dot(noise_vec, normal);
+    if (dot(tangent_seed, tangent_seed) < 0.000001) {
+        let fallback_axis = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(normal.x) > 0.9);
+        tangent_seed = cross(fallback_axis, normal);
+    }
+    let tangent = normalize(tangent_seed);
     let bitangent = cross(normal, tangent);
     let tbn = mat3x3<f32>(tangent, bitangent, normal);
 
@@ -93,11 +101,18 @@ fn fs_main(in: VertexOutput) -> @location(0) f32 {
         let sample_pos = frag_pos + (tbn * kernel[i].xyz) * params.radius;
 
         let offset = params.projection * vec4<f32>(sample_pos, 1.0);
+        if (offset.w <= 0.000001) {
+            continue;
+        }
         let offset_ndc = offset.xyz / offset.w;
         let sample_uv = vec2<f32>(
             offset_ndc.x * 0.5 + 0.5,
             -offset_ndc.y * 0.5 + 0.5,
         );
+
+        if (sample_uv.x <= 0.0 || sample_uv.x >= 1.0 || sample_uv.y <= 0.0 || sample_uv.y >= 1.0) {
+            continue;
+        }
 
         let sample_depth = textureSample(t_depth, s_depth, sample_uv);
         let sample_view_z = position_from_depth(sample_uv, sample_depth).z;

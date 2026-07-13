@@ -97,7 +97,6 @@ struct VertexOutput {
     @location(2) uv: vec2<f32>,
     @location(3) tangent: vec3<f32>,
     @location(4) bitangent: vec3<f32>,
-    @location(5) object_position: vec3<f32>,
 }
 
 @vertex
@@ -110,7 +109,6 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.tangent = normalize((object.model * vec4<f32>(in.tangent.xyz, 0.0)).xyz);
     out.bitangent = cross(out.world_normal, out.tangent) * in.tangent.w;
     out.uv = in.uv;
-    out.object_position = in.position;
     out.clip_position = global.view_proj * world_position;
 
     return out;
@@ -122,12 +120,6 @@ struct FragmentOutput {
 }
 
 const PI: f32 = 3.14159265359;
-
-fn surface_hash(p: vec3<f32>) -> f32 {
-    let q = fract(p * vec3<f32>(0.1031, 0.1030, 0.0973));
-    let mixed = q + dot(q, q.yzx + vec3<f32>(33.33));
-    return fract((mixed.x + mixed.y) * mixed.z);
-}
 
 fn distribution_ggx(n: vec3<f32>, h: vec3<f32>, roughness: f32) -> f32 {
     let a = roughness * roughness;
@@ -270,19 +262,8 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         n = normalize(tbn * normal_map);
     }
 
-    // Cheap world-space micro variation keeps large untextured surfaces from
-    // reading as perfectly uniform clay. It is stable under camera movement
-    // and intentionally subtle enough not to look like procedural noise.
-    let micro = surface_hash(floor(in.object_position * 7.0) + floor(abs(in.world_normal) * 11.0));
-    let fine = surface_hash(floor(in.object_position * 37.0) + vec3<f32>(7.0, 19.0, 3.0));
-    let seam_pattern = sin(in.uv.x * 37.0 + sin(in.uv.y * 19.0) * 1.7) * 0.5 + 0.5;
-    let material_variation = mix(0.97, 1.025, micro)
-        * mix(0.985, 1.015, fine)
-        * mix(0.992, 1.008, seam_pattern);
-    albedo *= material_variation;
-
     let metallic = material.metallic;
-    let roughness = clamp(material.roughness + (micro - 0.5) * 0.035 + (fine - 0.5) * 0.018, 0.04, 1.0);
+    let roughness = clamp(material.roughness, 0.04, 1.0);
     let v = normalize(global.camera_pos.xyz - in.world_position);
 
     var f0 = vec3<f32>(0.04);

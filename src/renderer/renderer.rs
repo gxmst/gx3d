@@ -149,7 +149,8 @@ pub struct Renderer {
     pub bloom_threshold_layout: wgpu::BindGroupLayout,
     pub bloom_blur_pipeline: wgpu::RenderPipeline,
     pub bloom_blur_layout: wgpu::BindGroupLayout,
-    pub bloom_blur_buffer: wgpu::Buffer,
+    pub bloom_blur_buffer_x: wgpu::Buffer,
+    pub bloom_blur_buffer_y: wgpu::Buffer,
     pub post_processor: super::post_process::PostProcessor,
     pub ssao_pass: super::ssao::SsaoPass,
     pub overlay: RefCell<super::overlay::OverlayRenderer>,
@@ -427,11 +428,17 @@ impl Renderer {
             cache: None,
         });
 
-        let bloom_blur_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Bloom Blur Uniforms"),
-            contents: bytemuck::cast_slice(&[0.0f32, 0.0f32]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        let create_blur_uniform = |label, direction: glam::Vec2| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(label),
+                contents: bytemuck::cast_slice(&[direction.x, direction.y]),
+                usage: wgpu::BufferUsages::UNIFORM,
+            })
+        };
+        // Queue writes are applied before the encoded passes at submit time,
+        // so each separable pass needs its own immutable direction buffer.
+        let bloom_blur_buffer_x = create_blur_uniform("Bloom Blur X Uniforms", glam::Vec2::X);
+        let bloom_blur_buffer_y = create_blur_uniform("Bloom Blur Y Uniforms", glam::Vec2::Y);
 
         // Create bind group layouts
         let bind_group_layouts = BindGroupLayouts::new(&device);
@@ -924,7 +931,8 @@ impl Renderer {
             bloom_threshold_layout,
             bloom_blur_pipeline,
             bloom_blur_layout,
-            bloom_blur_buffer,
+            bloom_blur_buffer_x,
+            bloom_blur_buffer_y,
             post_processor,
             ssao_pass,
             overlay,
@@ -1359,13 +1367,13 @@ impl Renderer {
             encoder,
             &self.bloom_view_a,
             &self.bloom_view_b,
-            glam::Vec2::X,
+            &self.bloom_blur_buffer_x,
         );
         self.dispatch_blur(
             encoder,
             &self.bloom_view_b,
             &self.bloom_view_a,
-            glam::Vec2::Y,
+            &self.bloom_blur_buffer_y,
         );
 
         &self.bloom_view_a
@@ -1376,20 +1384,15 @@ impl Renderer {
         encoder: &mut wgpu::CommandEncoder,
         input: &wgpu::TextureView,
         output: &wgpu::TextureView,
-        direction: glam::Vec2,
+        blur_uniform: &wgpu::Buffer,
     ) {
-        self.queue.write_buffer(
-            &self.bloom_blur_buffer,
-            0,
-            bytemuck::cast_slice(&[direction.x, direction.y]),
-        );
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Bloom Blur Bind Group"),
             layout: &self.bloom_blur_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: self.bloom_blur_buffer.as_entire_binding(),
+                    resource: blur_uniform.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,

@@ -1,7 +1,6 @@
 use crate::game::{InteractionFocus, PauseMenu, PauseMenuLayout, UiRect, RESOLUTION_OPTIONS};
 use bytemuck::{Pod, Zeroable};
 use glam::Vec2;
-use wgpu::util::DeviceExt;
 use wgpu_text::{
     glyph_brush::{ab_glyph::FontArc, OwnedSection, OwnedText},
     BrushBuilder, TextBrush,
@@ -86,6 +85,17 @@ pub struct HudState<'a> {
 struct OverlayVertex {
     position: [f32; 2],
     color: [f32; 4],
+}
+
+fn rect_vertex_capacity(required: usize) -> usize {
+    required
+        .max(1)
+        .checked_next_power_of_two()
+        .unwrap_or(required)
+}
+
+fn rect_vertex_buffer_size(capacity: usize) -> u64 {
+    (capacity * std::mem::size_of::<OverlayVertex>()) as u64
 }
 
 impl OverlayVertex {
@@ -778,16 +788,16 @@ impl OverlayRenderer {
         }
         let data = bytemuck::cast_slice(vertices);
         if vertices.len() > self.rect_vertex_capacity {
-            self.rect_vertex_capacity = vertices.len().next_power_of_two();
-            self.rect_vertex_buffer =
-                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Overlay Rect Vertex Buffer"),
-                    contents: data,
-                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                });
-        } else {
-            queue.write_buffer(&self.rect_vertex_buffer, 0, data);
+            self.rect_vertex_capacity = rect_vertex_capacity(vertices.len());
+            self.rect_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Overlay Rect Vertex Buffer"),
+                size: rect_vertex_buffer_size(self.rect_vertex_capacity),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
         }
+        debug_assert!(data.len() as u64 <= self.rect_vertex_buffer.size());
+        queue.write_buffer(&self.rect_vertex_buffer, 0, data);
     }
 }
 
@@ -1819,5 +1829,15 @@ mod tests {
         assert_eq!(reload_progress(-1.0, 2.0), 1.0);
         assert_eq!(reload_progress(f32::NAN, 2.0), 0.0);
         assert_eq!(reload_progress(1.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn rect_buffer_allocation_matches_the_recorded_growth_capacity() {
+        let capacity = rect_vertex_capacity(414);
+        assert_eq!(capacity, 512);
+        assert!(
+            rect_vertex_buffer_size(capacity)
+                >= (438 * std::mem::size_of::<OverlayVertex>()) as u64
+        );
     }
 }

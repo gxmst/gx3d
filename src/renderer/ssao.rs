@@ -483,9 +483,9 @@ fn generate_kernel_and_noise() -> (
         let r = lerp(0.1, 1.0, scale * scale);
         let theta = hash_f(i as u32, 0) * std::f32::consts::TAU;
         let phi = hash_f(i as u32, 1) * std::f32::consts::FRAC_PI_2;
-        let x = r * phi.cos() * theta.cos();
-        let y = r * phi.sin();
-        let z = r * phi.cos() * theta.sin();
+        let x = r * phi.sin() * theta.cos();
+        let y = r * phi.sin() * theta.sin();
+        let z = r * phi.cos();
         *entry = [x, y, z, 0.0];
     }
 
@@ -541,4 +541,19 @@ fn hash_f(seed: u32, offset: u32) -> f32 {
     s = s.wrapping_mul(1597334677);
     s ^= s >> 14;
     (s as f32) / (u32::MAX as f32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::generate_kernel_and_noise;
+
+    #[test]
+    fn ssao_kernel_uses_the_tbn_normal_axis() {
+        let (kernel, noise) = generate_kernel_and_noise();
+        assert!(kernel.iter().all(|sample| sample[2] >= 0.0));
+        assert!(kernel
+            .iter()
+            .any(|sample| sample[2] > sample[0].abs() && sample[2] > sample[1].abs()));
+        assert!(noise.iter().all(|sample| sample[2] == 0.0));
+    }
 }

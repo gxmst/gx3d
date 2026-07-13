@@ -53,6 +53,22 @@ fn aces_tone_map(x: vec3<f32>) -> vec3<f32> {
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
+fn interleaved_gradient_noise(pixel: vec2<f32>) -> f32 {
+    return fract(52.9829189 * fract(dot(pixel, vec2<f32>(0.06711056, 0.00583715))));
+}
+
+fn linear_to_srgb(linear: vec3<f32>) -> vec3<f32> {
+    let low = linear * 12.92;
+    let high = 1.055 * pow(linear, vec3<f32>(1.0 / 2.4)) - 0.055;
+    return select(high, low, linear <= vec3<f32>(0.0031308));
+}
+
+fn srgb_to_linear(encoded: vec3<f32>) -> vec3<f32> {
+    let low = encoded / 12.92;
+    let high = pow((encoded + 0.055) / 1.055, vec3<f32>(2.4));
+    return select(high, low, encoded <= vec3<f32>(0.04045));
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let hdr = textureSample(t_hdr, s_hdr, in.uv).rgb;
@@ -61,7 +77,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let softened_ao = mix(1.0, ao, 0.38);
     let exposed = (hdr + bloom * 0.16) * params.exposure.x * softened_ao;
     let mapped = aces_tone_map(exposed);
-    // The swapchain uses an sRGB format, so conversion is performed by the
-    // render target. Applying gamma here as well caused the washed film veil.
-    return vec4<f32>(mapped, 1.0);
+    let dither = (interleaved_gradient_noise(in.clip_position.xy) - 0.5) / 255.0;
+    // Dither by one encoded output step, then return to linear for the sRGB
+    // render target. Linear-space noise is amplified heavily near black.
+    let encoded = linear_to_srgb(mapped);
+    let dithered = clamp(encoded + vec3<f32>(dither), vec3<f32>(0.0), vec3<f32>(1.0));
+    return vec4<f32>(srgb_to_linear(dithered), 1.0);
 }
