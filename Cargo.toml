@@ -1,6 +1,6 @@
 [package]
 name = "gxengine"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
@@ -37,6 +37,15 @@ pollster = "0.3"
 bytemuck = { version = "1.14", features = ["derive"] }
 # 简易 2D 文本渲染，用于设置菜单覆盖层
 wgpu_text = "29.0.3"
+egui = { version = "0.35", default-features = false }
+egui-wgpu = { version = "0.35", default-features = false }
+egui-winit = { version = "0.35", default-features = false }
 
-[dev-dependencies]
-criterion = "0.5"
+# Fast dependencies even in dev builds: rapier/wgpu are far too slow at opt 0.
+# Our own crate stays unoptimized for fast incremental compiles.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

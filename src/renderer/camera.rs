@@ -59,8 +59,13 @@ impl Camera {
         self.rotation = yaw_rotation * self.rotation * pitch_rotation;
     }
 
+    /// Update the projection aspect ratio. Zero or non-finite sizes (e.g. the
+    /// `Resized(0, 0)` winit sends when the window is minimized) are ignored so
+    /// the projection matrix never turns into NaNs.
     pub fn set_aspect(&mut self, width: f32, height: f32) {
-        self.aspect = width / height;
+        if width > 0.0 && height > 0.0 && width.is_finite() && height.is_finite() {
+            self.aspect = width / height;
+        }
     }
 }
 

@@ -3,11 +3,7 @@ use crate::input::InputState;
 use winit::keyboard::KeyCode;
 
 pub fn system(_world: &mut EngineWorld, resources: &Resources) {
-    if resources
-        .get::<super::MenuState>()
-        .map(|menu| menu.0.open)
-        .unwrap_or(false)
-    {
+    if super::menu_open(resources) {
         return;
     }
     let toggles = {
@@ -16,9 +12,10 @@ pub fn system(_world: &mut EngineWorld, resources: &Resources) {
             input.is_key_just_pressed(KeyCode::F3),
             input.is_key_just_pressed(KeyCode::F4),
             input.is_key_just_pressed(KeyCode::F5),
+            input.is_key_just_pressed(KeyCode::F6),
         )
     };
-    if toggles.0 || toggles.1 || toggles.2 {
+    if toggles.0 || toggles.1 || toggles.2 || toggles.3 {
         let mut state = resources.expect_mut::<super::PhysicsDebugState>();
         if toggles.0 {
             state.colliders = !state.colliders;
@@ -28,6 +25,9 @@ pub fn system(_world: &mut EngineWorld, resources: &Resources) {
         }
         if toggles.2 {
             state.contacts = !state.contacts;
+        }
+        if toggles.3 {
+            state.impulses = !state.impulses;
         }
     }
 }

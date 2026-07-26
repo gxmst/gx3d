@@ -4,30 +4,20 @@ use crate::game::EnemyAI;
 use crate::physics::{PhysicsBody, PhysicsWorld};
 use crate::renderer::RenderMesh;
 use glam::{Quat, Vec3};
-use rapier3d::control::{CharacterAutostep, CharacterLength, KinematicCharacterController};
 
 use super::{HitFlash, TimedEffect, WeaponFeedbackAssets};
 
 pub fn system(world: &mut EngineWorld, resources: &Resources) {
+    // In match mode actors freeze during warmup / round-over phases.
+    if !super::match_mode::movement_allowed(resources) {
+        return;
+    }
     let dt = resources
         .get::<Time>()
         .map(|t| t.fixed_timestep)
         .unwrap_or(0.0);
 
-    let controller = KinematicCharacterController {
-        offset: CharacterLength::Absolute(0.025),
-        slide: true,
-        autostep: Some(CharacterAutostep {
-            max_height: CharacterLength::Absolute(0.32),
-            min_width: CharacterLength::Absolute(0.18),
-            include_dynamic_bodies: false,
-        }),
-        max_slope_climb_angle: 46.0_f32.to_radians(),
-        min_slope_slide_angle: 55.0_f32.to_radians(),
-        snap_to_ground: Some(CharacterLength::Absolute(0.32)),
-        normal_nudge_factor: 1.0e-3,
-        ..Default::default()
-    };
+    let controller = crate::physics::character_controller(0.32, Some(0.32));
     let mut physics = resources.expect_mut::<PhysicsWorld>();
     for (transform, ai, body) in world
         .ecs
@@ -85,20 +75,33 @@ pub fn feedback_system(world: &mut EngineWorld, resources: &Resources) {
     // --- Collect dead enemies and their last position + physics body. ---
     // (Decided in weapon.rs via `EnemyAI::take_damage`.) Gather first so the
     // query borrow is released before we mutate the world.
+    // Match bots (BotBrain) revive next round: they get a death burst and are
+    // sunk out of sight instead of being despawned.
     let dead: Vec<(
         hecs::Entity,
         Vec3,
         Option<rapier3d::prelude::RigidBodyHandle>,
+        bool,
     )> = world
         .ecs
-        .query::<(hecs::Entity, &EnemyAI, &Transform, Option<&PhysicsBody>)>()
+        .query::<(
+            hecs::Entity,
+            &EnemyAI,
+            &Transform,
+            Option<&PhysicsBody>,
+            Option<&crate::game::BotBrain>,
+        )>()
         .iter()
-        .filter(|(_, ai, _, _)| !ai.is_alive)
-        .map(|(entity, _, transform, body)| {
+        .filter(|(_, ai, _, _, brain)| {
+            // A bot "dies" once: skip ones already moved below the map.
+            !(ai.is_alive || brain.is_some() && ai.health < 0.0)
+        })
+        .map(|(entity, _, transform, body, brain)| {
             (
                 entity,
                 transform.position,
                 body.map(|b| b.rigid_body_handle),
+                brain.is_some(),
             )
         })
         .collect();
@@ -108,17 +111,34 @@ pub fn feedback_system(world: &mut EngineWorld, resources: &Resources) {
     }
 
     let feedback = resources.get::<WeaponFeedbackAssets>().map(|f| *f);
-    for (entity, position, body_handle) in dead {
+    for (entity, position, body_handle, is_bot) in dead {
         if let Some(feedback) = feedback {
             spawn_death_burst(world, position, feedback);
         }
-        // Remove the physics body so the corpse leaves no ghost collider.
-        if let Some(handle) = body_handle {
-            if let Some(mut physics) = resources.get_mut::<crate::physics::PhysicsWorld>() {
-                physics.remove_body(handle);
+        if is_bot {
+            // Park the bot far below the map until the next round revives it.
+            // health < 0 marks "already processed" for the filter above.
+            let parked = position - Vec3::Y * 500.0;
+            if let Ok(mut transform) = world.ecs.get::<&mut Transform>(entity) {
+                transform.position = parked;
             }
+            if let Ok(mut ai) = world.ecs.get::<&mut EnemyAI>(entity) {
+                ai.health = -1.0;
+            }
+            if let Some(handle) = body_handle {
+                if let Some(mut physics) = resources.get_mut::<crate::physics::PhysicsWorld>() {
+                    physics.teleport_body(handle, parked);
+                }
+            }
+        } else {
+            // Remove the physics body so the corpse leaves no ghost collider.
+            if let Some(handle) = body_handle {
+                if let Some(mut physics) = resources.get_mut::<crate::physics::PhysicsWorld>() {
+                    physics.remove_body(handle);
+                }
+            }
+            world.despawn(entity);
         }
-        world.despawn(entity);
     }
 }
 

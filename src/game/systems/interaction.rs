@@ -1,26 +1,25 @@
 use crate::core::{EngineWorld, Name, Resources, Time, Transform};
 use crate::game::{Explosive, InteractionFocus, ToggleDoor};
-use crate::physics::{PhysicsBody, PhysicsWorld, Ray};
-use crate::renderer::Camera;
+use crate::physics::{PhysicsBody, PhysicsWorld};
 use winit::keyboard::KeyCode;
 
 pub fn system(world: &mut EngineWorld, resources: &Resources) {
-    if resources
-        .get::<super::MenuState>()
-        .map(|menu| menu.0.open)
-        .unwrap_or(false)
-    {
+    if super::menu_open(resources) {
         return;
     }
-    let (origin, direction) = {
-        let camera = resources.expect::<Camera>();
-        (camera.position, camera.forward())
-    };
-    let hit = {
-        let physics = resources.expect::<PhysicsWorld>();
-        let player_body = resources.expect::<super::PlayerBody>().0;
-        physics.cast_ray_excluding_body(&Ray::new(origin, direction, 10.0), player_body)
-    };
+    // The buy menu captures digit/interaction input; spectators cannot act.
+    let buy_open = resources
+        .get::<super::buy_menu::BuyState>()
+        .map(|buy| buy.open)
+        .unwrap_or(false);
+    let spectating = resources
+        .get::<super::match_mode::MatchState>()
+        .map(|state| state.player_spectating)
+        .unwrap_or(false);
+    if buy_open || spectating {
+        return;
+    }
+    let hit = super::crosshair_raycast(resources, 10.0);
     let interact_pressed = resources
         .expect::<crate::input::InputState>()
         .is_key_just_pressed(KeyCode::KeyE);

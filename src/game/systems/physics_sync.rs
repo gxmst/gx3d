@@ -19,11 +19,15 @@ fn sync_to_physics(world: &mut EngineWorld, physics: &mut PhysicsWorld) {
     {
         if frozen.is_some() {
             if let Some(rb) = physics.rigid_body_set.get_mut(body.rigid_body_handle) {
-                rb.set_body_type(rapier3d::prelude::RigidBodyType::Fixed, true);
-                rb.set_translation(transform.position, true);
-                rb.set_rotation(transform.rotation, true);
-                rb.set_linvel(glam::Vec3::ZERO, true);
-                rb.set_angvel(glam::Vec3::ZERO, true);
+                // Only freeze once; re-issuing set_* with wake=true every tick
+                // would keep the body's contact island awake forever.
+                if rb.body_type() != rapier3d::prelude::RigidBodyType::Fixed {
+                    rb.set_body_type(rapier3d::prelude::RigidBodyType::Fixed, true);
+                    rb.set_translation(transform.position, true);
+                    rb.set_rotation(transform.rotation, true);
+                    rb.set_linvel(glam::Vec3::ZERO, true);
+                    rb.set_angvel(glam::Vec3::ZERO, true);
+                }
             }
             continue;
         }

@@ -13,6 +13,46 @@ mod spawn;
 
 pub use spawn::spawn_scene;
 
+/// One selectable scene on disk.
+#[derive(Debug, Clone)]
+pub struct SceneEntry {
+    /// Display name (file stem).
+    pub name: String,
+    pub path: std::path::PathBuf,
+}
+
+/// All scenes found in `assets/scenes/*.json`, sorted by name. Scanned once
+/// at startup; drives the pause menu's scene selector.
+#[derive(Debug, Clone, Default)]
+pub struct SceneLibrary(pub Vec<SceneEntry>);
+
+impl SceneLibrary {
+    pub fn scan() -> Self {
+        let mut entries = Vec::new();
+        if let Ok(dir) = std::fs::read_dir("assets/scenes") {
+            for entry in dir.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                        entries.push(SceneEntry {
+                            name: stem.to_string(),
+                            path,
+                        });
+                    }
+                }
+            }
+        }
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        Self(entries)
+    }
+
+    /// Index of the entry matching `path` (by file stem), if any.
+    pub fn index_of(&self, path: &std::path::Path) -> Option<usize> {
+        let stem = path.file_stem()?.to_str()?;
+        self.0.iter().position(|entry| entry.name == stem)
+    }
+}
+
 use serde::Deserialize;
 
 /// A complete, data-driven description of a level.
@@ -37,6 +77,108 @@ pub struct Scene {
     /// Optional enemy layout.
     #[serde(default)]
     pub enemies: Option<EnemyDesc>,
+    /// Optional tornado force field (physics showcase).
+    #[serde(default)]
+    pub tornado: Option<TornadoDesc>,
+    /// Optional animated water surface with buoyancy (physics showcase).
+    #[serde(default)]
+    pub water: Option<WaterDesc>,
+    /// Optional destructible block structures (physics showcase).
+    #[serde(default)]
+    pub structures: Vec<StructureDesc>,
+    /// Optional team-vs-team bot match (CS-style rounds). Presence of this
+    /// block switches the scene into match mode: `enemies` is ignored.
+    #[serde(default)]
+    pub match_mode: Option<MatchDesc>,
+}
+
+/// A 5v5-style bot match: the player joins `team_a` at its first spawn.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MatchDesc {
+    /// Mesh used for every bot (usually `humanoid`).
+    pub mesh: String,
+    /// Material for the player's team (team A) bots.
+    pub team_a_material: String,
+    /// Material for the opposing team (team B) bots.
+    pub team_b_material: String,
+    /// Spawns for team A. The FIRST entry is the player spawn; bots fill the
+    /// rest. Team size = spawns declared.
+    pub team_a_spawns: Vec<[f32; 3]>,
+    /// Spawns for team B (all bots).
+    pub team_b_spawns: Vec<[f32; 3]>,
+    /// Patrol/objective waypoints bots roam between when no enemy is visible.
+    /// Shared by both teams; bots pick nearby points to push through the map.
+    #[serde(default)]
+    pub waypoints: Vec<[f32; 3]>,
+    /// Rounds needed to win the match (first to N).
+    #[serde(default = "default_rounds_to_win")]
+    pub rounds_to_win: u32,
+    /// C4 bomb site center; None disables the objective.
+    #[serde(default)]
+    pub bomb_site: Option<[f32; 3]>,
+    /// Bomb site radius.
+    #[serde(default = "default_bomb_site_radius")]
+    pub bomb_site_radius: f32,
+}
+
+/// A vortex force field that lifts and spins dynamic bodies.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TornadoDesc {
+    /// Base position of the funnel axis (ground level).
+    pub center: [f32; 3],
+    /// Influence radius around the axis.
+    #[serde(default = "default_tornado_radius")]
+    pub radius: f32,
+    /// Influence height above `center`.
+    #[serde(default = "default_tornado_height")]
+    pub height: f32,
+    /// Peak tangential force in newtons applied near the core.
+    #[serde(default = "default_tornado_strength")]
+    pub strength: f32,
+    /// How far the funnel base wanders from `center` over time.
+    #[serde(default = "default_tornado_wander")]
+    pub wander: f32,
+}
+
+/// An animated water plane. Dynamic bodies inside its bounds receive
+/// buoyancy from the same wave function that displaces the surface mesh.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WaterDesc {
+    /// Center of the water surface (y = rest water level).
+    pub center: [f32; 3],
+    /// Edge length of the square surface.
+    #[serde(default = "default_water_size")]
+    pub size: f32,
+    /// Grid subdivisions of the surface mesh per side.
+    #[serde(default = "default_water_subdivisions")]
+    pub subdivisions: u32,
+    /// Wave amplitude in meters.
+    #[serde(default = "default_water_amplitude")]
+    pub amplitude: f32,
+    /// Name of a material declared in [`Scene::materials`].
+    pub material: String,
+}
+
+/// A grid of blocks spawned frozen-in-place; explosions and impacts unfreeze
+/// them so the structure collapses piece by piece.
+#[derive(Debug, Clone, Deserialize)]
+pub struct StructureDesc {
+    /// Center of the structure's base (bottom face).
+    pub position: [f32; 3],
+    /// Half-extents of one block.
+    pub block_half_extents: [f32; 3],
+    /// Block count along X, Y (up), Z.
+    pub blocks: [u32; 3],
+    /// If true only the perimeter walls are built (hollow tower).
+    #[serde(default)]
+    pub hollow: bool,
+    /// Mass per block in kg.
+    #[serde(default = "default_structure_block_mass")]
+    pub block_mass: f32,
+    /// Name of a mesh declared in [`Scene::meshes`] (usually `cube`).
+    pub mesh: String,
+    /// Name of a material declared in [`Scene::materials`].
+    pub material: String,
 }
 
 /// Player spawn configuration.
@@ -139,6 +281,9 @@ pub struct MaterialDesc {
     /// Emissive RGB (HDR; values above 1.0 glow through bloom).
     #[serde(default)]
     pub emissive: [f32; 3],
+    /// Water shading path: fresnel + animated ripples + foam + transparency.
+    #[serde(default)]
+    pub water: bool,
 }
 
 /// A light source.
@@ -583,6 +728,36 @@ fn default_plane_size() -> f32 {
 fn default_door_speed() -> f32 {
     4.5
 }
+fn default_tornado_radius() -> f32 {
+    12.0
+}
+fn default_tornado_height() -> f32 {
+    28.0
+}
+fn default_tornado_strength() -> f32 {
+    260.0
+}
+fn default_tornado_wander() -> f32 {
+    6.0
+}
+fn default_water_size() -> f32 {
+    80.0
+}
+fn default_water_subdivisions() -> u32 {
+    96
+}
+fn default_water_amplitude() -> f32 {
+    0.55
+}
+fn default_structure_block_mass() -> f32 {
+    35.0
+}
+fn default_rounds_to_win() -> u32 {
+    5
+}
+fn default_bomb_site_radius() -> f32 {
+    6.0
+}
 fn default_explosion_radius() -> f32 {
     5.0
 }
@@ -640,8 +815,8 @@ mod tests {
         let text = include_str!("../../../assets/scenes/dust2.json");
         let scene = Scene::from_json(text).expect("dust2.json must parse");
         assert!(
-            scene.entities.len() >= 250,
-            "the showcase scene should retain its authored detail pass"
+            scene.entities.len() >= 180,
+            "the dust2 layout should retain its generated geometry (tools/gen_dust2.py)"
         );
         let mesh_names: Vec<&str> = scene.meshes.iter().map(|m| m.name.as_str()).collect();
         for required in ["cube", "sphere", "cylinder", "rifle"] {
@@ -659,8 +834,12 @@ mod tests {
             warnings.is_empty(),
             "dust2 should be warning-free after authoring validation: {warnings:#?}"
         );
-        let enemies = scene.enemies.expect("dust2 declares enemies");
-        assert_eq!(enemies.spawn_points.len(), 4);
+        // dust2 is a 5v5 match scene: match_mode supersedes patrol enemies.
+        let match_mode = scene.match_mode.expect("dust2 declares a match block");
+        assert_eq!(match_mode.team_a_spawns.len(), 5, "player + 4 teammates");
+        assert_eq!(match_mode.team_b_spawns.len(), 5);
+        assert!(match_mode.bomb_site.is_some(), "dust2 has a C4 objective");
+        assert!(scene.enemies.is_none());
     }
 
     #[test]

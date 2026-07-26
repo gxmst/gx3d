@@ -74,9 +74,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let hdr = textureSample(t_hdr, s_hdr, in.uv).rgb;
     let bloom = textureSample(t_bloom, s_bloom, in.uv).rgb;
     let ao = textureSample(t_ao, s_ao, in.uv).r;
-    let softened_ao = mix(1.0, ao, 0.38);
+    // AO weighs in a little harder than before; grounded contact shading is
+    // most of what separates "clay render" from a lit space.
+    let softened_ao = mix(1.0, ao, 0.52);
     let exposed = (hdr + bloom * 0.16) * params.exposure.x * softened_ao;
-    let mapped = aces_tone_map(exposed);
+    var mapped = aces_tone_map(exposed);
+
+    // Subtle grade: a touch of saturation and a soft vignette focus the eye
+    // without reading as a filter.
+    let luma = dot(mapped, vec3<f32>(0.2126, 0.7152, 0.0722));
+    mapped = clamp(mix(vec3<f32>(luma), mapped, 1.07), vec3<f32>(0.0), vec3<f32>(1.0));
+    let offset = in.uv - vec2<f32>(0.5, 0.5);
+    let vignette = 1.0 - dot(offset, offset) * 0.34;
+    mapped *= clamp(vignette, 0.0, 1.0);
     let dither = (interleaved_gradient_noise(in.clip_position.xy) - 0.5) / 255.0;
     // Dither by one encoded output step, then return to linear for the sRGB
     // render target. Linear-space noise is amplified heavily near black.

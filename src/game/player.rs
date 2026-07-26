@@ -1,6 +1,4 @@
-use crate::input::InputState;
 use crate::kinematics::CameraController;
-use crate::renderer::Camera;
 use glam::Vec3;
 
 const JUMP_BUFFER_SECONDS: f32 = 0.12;
@@ -44,12 +42,12 @@ impl Player {
         }
     }
 
-    pub fn update(&mut self, camera: &mut Camera, input: &InputState, dt: f32) {
-        self.camera_controller.update(camera, input, dt);
-    }
-
     /// Set the checkpoint used when the player falls out of the authored map.
     /// The latest stable grounded position will replace it during play.
+    pub fn spawn_position(&self) -> Vec3 {
+        self.spawn_position
+    }
+
     pub fn set_spawn_position(&mut self, position: Vec3) {
         if position.is_finite() {
             self.spawn_position = position;

@@ -1,9 +1,3 @@
-pub mod keyboard;
-pub mod mouse;
-
-pub use keyboard::*;
-pub use mouse::*;
-
 use glam::Vec2;
 use std::collections::HashMap;
 use winit::event::{ElementState, MouseButton};
@@ -143,34 +137,5 @@ mod tests {
         assert!(input.is_key_pressed(KeyCode::KeyW));
         input.clear_transient_and_held_input();
         assert!(!input.is_key_pressed(KeyCode::KeyW));
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct MouseSettings {
-    pub sensitivity: f32,
-    pub invert_y: bool,
-}
-
-impl MouseSettings {
-    pub fn new() -> Self {
-        Self {
-            sensitivity: 0.002,
-            invert_y: false,
-        }
-    }
-
-    pub fn apply(&self, delta: Vec2) -> Vec2 {
-        let mut adjusted = delta * self.sensitivity;
-        if self.invert_y {
-            adjusted.y = -adjusted.y;
-        }
-        adjusted
-    }
-}
-
-impl Default for MouseSettings {
-    fn default() -> Self {
-        Self::new()
     }
 }

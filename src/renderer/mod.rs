@@ -1,15 +1,19 @@
 pub mod bind_groups;
+pub mod bloom;
 pub mod camera;
 pub mod debug_lines;
 pub mod ibl;
 pub mod light;
+pub mod object_uniforms;
 pub mod overlay;
-pub mod pipeline;
+pub(crate) mod pipeline;
 pub mod post_process;
 #[allow(clippy::module_inception)]
 pub mod renderer;
 pub mod sky;
 pub mod ssao;
+
+pub mod debug_ui;
 
 pub use camera::*;
 pub use debug_lines::*;
@@ -22,18 +26,8 @@ pub use sky::*;
 pub use ssao::*;
 
 use crate::asset::{Handle, Material, Mesh};
-use glam::Mat4;
 
 pub struct RenderMesh {
     pub mesh: Handle<Mesh>,
     pub material: Handle<Material>,
-}
-
-pub struct RenderData {
-    pub view_proj: Mat4,
-    pub camera_pos: glam::Vec3,
-    pub time: f32,
-    pub ambient_color: [f32; 4],
-    pub meshes: Vec<(Mat4, Handle<Mesh>, Handle<Material>)>,
-    pub lights: Vec<Light>,
 }

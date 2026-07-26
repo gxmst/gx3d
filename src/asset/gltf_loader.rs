@@ -93,6 +93,7 @@ impl GltfLoader {
                 normal_map,
                 metallic_roughness_map,
                 emissive_map,
+                water: false,
             };
             let handle = asset_manager.materials.insert(mat);
             material_handles.push(handle);

@@ -6,14 +6,10 @@ use crate::renderer::Camera;
 use glam::Vec3;
 use winit::keyboard::KeyCode;
 
-use super::{MenuState, PlayerBody, ViewMode, ViewModeState};
+use super::{PlayerBody, ViewMode, ViewModeState};
 
 pub fn system(_world: &mut EngineWorld, resources: &Resources) {
-    if resources
-        .get::<MenuState>()
-        .map(|menu| menu.0.open)
-        .unwrap_or(false)
-    {
+    if super::menu_open(resources) {
         return;
     }
 
@@ -63,19 +59,16 @@ pub fn system(_world: &mut EngineWorld, resources: &Resources) {
 
     let dt = resources.expect::<Time>().real_delta_seconds().min(0.05);
     {
-        let mut player = resources.remove::<Player>().expect("Player missing");
-        {
-            let mut camera = resources.expect_mut::<Camera>();
-            player.camera_controller.update_camera_rotation(
-                &mut camera,
-                &InputState {
-                    mouse_delta,
-                    ..Default::default()
-                },
-                dt,
-            );
-        }
-        resources.insert(player);
+        let mut player = resources.expect_mut::<Player>();
+        let mut camera = resources.expect_mut::<Camera>();
+        player.camera_controller.update_camera_rotation(
+            &mut camera,
+            &InputState {
+                mouse_delta,
+                ..Default::default()
+            },
+            dt,
+        );
     }
 
     let mut camera = resources.expect_mut::<Camera>();

@@ -4,7 +4,7 @@ use rapier3d::parry::query::ShapeCastOptions;
 use rapier3d::prelude::{
     BroadPhaseBvh, CCDSolver, Collider, ColliderHandle, ColliderSet, ImpulseJointSet,
     IntegrationParameters, IslandManager, MultibodyJointSet, NarrowPhase, PhysicsPipeline,
-    QueryFilter, RigidBodyBuilder, RigidBodyHandle, RigidBodySet,
+    QueryFilter, RigidBodyBuilder, RigidBodyHandle, RigidBodySet, RigidBodyType,
 };
 use std::collections::HashMap;
 
@@ -20,6 +20,30 @@ pub use collider::*;
 pub use raycast::*;
 pub use sandbox::*;
 pub use world::*;
+
+/// Shared kinematic character controller configuration used by both the
+/// player and enemies, so slope/step behavior never drifts between them.
+/// `snap_to_ground: None` disables downward snapping (e.g. while jumping).
+pub fn character_controller(
+    max_step_height: f32,
+    snap_to_ground: Option<f32>,
+) -> KinematicCharacterController {
+    KinematicCharacterController {
+        offset: CharacterLength::Absolute(0.02),
+        slide: true,
+        autostep: Some(rapier3d::control::CharacterAutostep {
+            max_height: CharacterLength::Absolute(max_step_height),
+            min_width: CharacterLength::Absolute(0.18),
+            // Small props should be pushed instead of treated like stairs.
+            include_dynamic_bodies: false,
+        }),
+        max_slope_climb_angle: 48.0_f32.to_radians(),
+        min_slope_slide_angle: 54.0_f32.to_radians(),
+        snap_to_ground: snap_to_ground.map(CharacterLength::Absolute),
+        normal_nudge_factor: 1.0e-3,
+        ..Default::default()
+    }
+}
 
 /// Result of one collision-constrained kinematic character movement.
 #[derive(Debug, Clone, Copy)]
@@ -49,6 +73,15 @@ fn character_length_value(length: CharacterLength, reference: f32) -> f32 {
     }
 }
 
+/// A recently applied impulse, recorded for the F6 debug arrows. `age`
+/// counts up; the layer fades arrows out over ~1.2 s.
+#[derive(Debug, Clone, Copy)]
+pub struct ImpulseEvent {
+    pub point: Vec3,
+    pub impulse: Vec3,
+    pub age: f32,
+}
+
 pub struct PhysicsWorld {
     pub rigid_body_set: RigidBodySet,
     pub collider_set: ColliderSet,
@@ -62,6 +95,8 @@ pub struct PhysicsWorld {
     pub multibody_joint_set: MultibodyJointSet,
     pub ccd_solver: CCDSolver,
     pub collider_entity_map: HashMap<ColliderHandle, hecs::Entity>,
+    /// Recent impulses (bounded ring, tick-aged by `step`).
+    pub impulse_events: Vec<ImpulseEvent>,
 }
 
 impl PhysicsWorld {
@@ -87,6 +122,7 @@ impl PhysicsWorld {
             multibody_joint_set: MultibodyJointSet::new(),
             ccd_solver: CCDSolver::new(),
             collider_entity_map: HashMap::new(),
+            impulse_events: Vec::new(),
         }
     }
 
@@ -113,6 +149,13 @@ impl PhysicsWorld {
     }
 
     pub fn step(&mut self) {
+        // Age and expire impulse arrows with the physics clock so they pause
+        // with the simulation (perfect for single-step observation).
+        let dt = self.integration_parameters.dt;
+        for event in &mut self.impulse_events {
+            event.age += dt;
+        }
+        self.impulse_events.retain(|event| event.age < 1.2);
         self.clamp_dynamic_velocities();
         self.physics_pipeline.step(
             self.gravity,
@@ -497,23 +540,62 @@ impl PhysicsWorld {
         }
     }
 
-    pub fn apply_force(&mut self, handle: RigidBodyHandle, force: Vec3) {
-        if let Some(rb) = self.rigid_body_set.get_mut(handle) {
-            rb.add_force(vec3_to_rapier(force), true);
-        }
-    }
-
     pub fn apply_impulse(&mut self, handle: RigidBodyHandle, impulse: Vec3) {
         if let Some(rb) = self.rigid_body_set.get_mut(handle) {
             rb.apply_impulse(vec3_to_rapier(impulse), true);
+            let position = Vec3::new(rb.translation().x, rb.translation().y, rb.translation().z);
+            self.record_impulse(position, impulse);
         }
+    }
+
+    /// Pin a dynamic body in place (sandbox "freeze": body type Fixed and all
+    /// velocity cleared).
+    pub fn freeze_body(&mut self, handle: RigidBodyHandle) {
+        if let Some(rb) = self.rigid_body_set.get_mut(handle) {
+            rb.set_body_type(RigidBodyType::Fixed, true);
+            rb.set_linvel(vec3_to_rapier(Vec3::ZERO), true);
+            rb.set_angvel(vec3_to_rapier(Vec3::ZERO), true);
+        }
+    }
+
+    /// Return a frozen body to dynamic simulation. Harmless on bodies that are
+    /// already dynamic.
+    pub fn unfreeze_body(&mut self, handle: RigidBodyHandle) {
+        if let Some(rb) = self.rigid_body_set.get_mut(handle) {
+            if rb.is_fixed() {
+                rb.set_body_type(RigidBodyType::Dynamic, true);
+            }
+        }
+    }
+
+    pub fn body_is_frozen(&self, handle: RigidBodyHandle) -> bool {
+        self.rigid_body_set
+            .get(handle)
+            .map(|rb| rb.is_fixed())
+            .unwrap_or(false)
     }
 
     pub fn apply_impulse_at_point(&mut self, handle: RigidBodyHandle, impulse: Vec3, point: Vec3) {
         if let Some(rb) = self.rigid_body_set.get_mut(handle) {
             rb.wake_up(true);
             rb.apply_impulse_at_point(vec3_to_rapier(impulse), vec3_to_rapier(point), true);
+            self.record_impulse(point, impulse);
         }
+    }
+
+    /// Record an impulse for the F6 arrows (bounded to the latest 64).
+    pub fn record_impulse(&mut self, point: Vec3, impulse: Vec3) {
+        if !point.is_finite() || !impulse.is_finite() || impulse.length_squared() < 1.0e-4 {
+            return;
+        }
+        if self.impulse_events.len() >= 64 {
+            self.impulse_events.remove(0);
+        }
+        self.impulse_events.push(ImpulseEvent {
+            point,
+            impulse,
+            age: 0.0,
+        });
     }
 
     pub fn collider_body(&self, collider: ColliderHandle) -> Option<RigidBodyHandle> {

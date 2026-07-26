@@ -3,108 +3,30 @@ use crate::core::{GxError, GxResult};
 use glam::Mat4;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::mem;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
-use super::bind_groups::{BindGroupLayouts, GlobalUniforms, MaterialUniforms, ObjectUniforms};
+use super::bind_groups::{BindGroupLayouts, GlobalUniforms, MaterialUniforms};
+use super::bloom::BloomPass;
 use super::camera::Camera;
+use super::object_uniforms::ObjectUniformState;
 use crate::asset::Vertex;
 
-const INITIAL_OBJECT_CAPACITY: usize = 1024;
+/// Directional shadow map resolution. `assets/shaders/pbr.wgsl` derives its
+/// PCF texel size from the same value via shader-source injection, and the
+/// shadow texel snapping in `game::systems::render` reads this constant.
+pub const SHADOW_MAP_SIZE: u32 = 2048;
 
-pub(crate) struct ObjectUniformState {
-    buffer: wgpu::Buffer,
-    bind_group: wgpu::BindGroup,
-    capacity: usize,
-    stride: usize,
-    next_index: usize,
-}
-
-impl ObjectUniformState {
-    fn new(device: &wgpu::Device, layout: &wgpu::BindGroupLayout) -> Self {
-        let raw_size = mem::size_of::<ObjectUniforms>();
-        let alignment = device.limits().min_uniform_buffer_offset_alignment as usize;
-        let stride = raw_size.div_ceil(alignment) * alignment;
-        let capacity = INITIAL_OBJECT_CAPACITY;
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Object Uniform Buffer"),
-            size: (capacity * stride) as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Object Bind Group"),
-            layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &buffer,
-                    offset: 0,
-                    size: Some(core::num::NonZeroU64::new(raw_size as u64).unwrap()),
-                }),
-            }],
-        });
-        Self {
-            buffer,
-            bind_group,
-            capacity,
-            stride,
-            next_index: 0,
-        }
-    }
-
-    fn ensure_capacity(
-        &mut self,
-        device: &wgpu::Device,
-        layout: &wgpu::BindGroupLayout,
-        count: usize,
-    ) {
-        if count <= self.capacity {
-            return;
-        }
-        let new_capacity = count.next_power_of_two().max(INITIAL_OBJECT_CAPACITY);
-        let raw_size = mem::size_of::<ObjectUniforms>();
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Object Uniform Buffer"),
-            size: (new_capacity * self.stride) as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Object Bind Group"),
-            layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &buffer,
-                    offset: 0,
-                    size: Some(core::num::NonZeroU64::new(raw_size as u64).unwrap()),
-                }),
-            }],
-        });
-        self.buffer = buffer;
-        self.bind_group = bind_group;
-        self.capacity = new_capacity;
-    }
-
-    fn reset(&mut self) {
-        self.next_index = 0;
-    }
-
-    fn allocate(&mut self, queue: &wgpu::Queue, model: Mat4) -> u32 {
-        let index = self.next_index;
-        self.next_index += 1;
-        let offset = index * self.stride;
-        let uniforms = ObjectUniforms::new(model);
-        queue.write_buffer(
-            &self.buffer,
-            offset as u64,
-            bytemuck::cast_slice(&[uniforms]),
-        );
-        offset as u32
-    }
+/// Optional per-material texture views passed to material bind group creation.
+/// A `None` slot binds the matching default texture and clears the shader's
+/// `has_*_map` flag.
+#[derive(Default, Clone, Copy)]
+pub struct MaterialTextureViews<'a> {
+    pub albedo: Option<&'a wgpu::TextureView>,
+    pub normal: Option<&'a wgpu::TextureView>,
+    pub emissive: Option<&'a wgpu::TextureView>,
+    pub metallic_roughness: Option<&'a wgpu::TextureView>,
 }
 
 pub struct Renderer {
@@ -119,13 +41,15 @@ pub struct Renderer {
     pub global_bind_group: wgpu::BindGroup,
     pub global_buffer: wgpu::Buffer,
     pub pipeline: wgpu::RenderPipeline,
+    /// Alpha-blended variant of the PBR pipeline for water/glass: depth test
+    /// on, depth write off, culling off. Drawn after all opaque geometry.
+    pub transparent_pipeline: wgpu::RenderPipeline,
     pub shader: wgpu::ShaderModule,
     pub default_texture: wgpu::Texture,
     pub default_texture_view: wgpu::TextureView,
     pub default_black_texture: wgpu::Texture,
     pub default_black_texture_view: wgpu::TextureView,
     pub sampler: wgpu::Sampler,
-    pub texture_cache: HashMap<u64, (wgpu::Texture, wgpu::TextureView)>,
     pub ibl_sampler: wgpu::Sampler,
     pub brdf_sampler: wgpu::Sampler,
     pub irradiance_view: wgpu::TextureView,
@@ -140,17 +64,7 @@ pub struct Renderer {
     pub shadow_bind_group: wgpu::BindGroup,
     pub hdr_color_texture: wgpu::Texture,
     pub hdr_color_view: wgpu::TextureView,
-    pub bloom_texture_a: wgpu::Texture,
-    pub bloom_view_a: wgpu::TextureView,
-    pub bloom_texture_b: wgpu::Texture,
-    pub bloom_view_b: wgpu::TextureView,
-    pub bloom_sampler: wgpu::Sampler,
-    pub bloom_threshold_pipeline: wgpu::RenderPipeline,
-    pub bloom_threshold_layout: wgpu::BindGroupLayout,
-    pub bloom_blur_pipeline: wgpu::RenderPipeline,
-    pub bloom_blur_layout: wgpu::BindGroupLayout,
-    pub bloom_blur_buffer_x: wgpu::Buffer,
-    pub bloom_blur_buffer_y: wgpu::Buffer,
+    pub bloom: BloomPass,
     pub post_processor: super::post_process::PostProcessor,
     pub ssao_pass: super::ssao::SsaoPass,
     pub overlay: RefCell<super::overlay::OverlayRenderer>,
@@ -232,213 +146,13 @@ impl Renderer {
         });
         let hdr_color_view = hdr_color_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Bloom targets at half resolution.
-        let bloom_width = (surface_config.width / 2).max(1);
-        let bloom_height = (surface_config.height / 2).max(1);
-        let create_bloom_texture = |label| {
-            device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(label),
-                size: wgpu::Extent3d {
-                    width: bloom_width,
-                    height: bloom_height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba16Float,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            })
-        };
-        let bloom_texture_a = create_bloom_texture("Bloom A");
-        let bloom_view_a = bloom_texture_a.create_view(&wgpu::TextureViewDescriptor::default());
-        let bloom_texture_b = create_bloom_texture("Bloom B");
-        let bloom_view_b = bloom_texture_b.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let bloom_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Bloom Sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            ..Default::default()
-        });
-
-        let bloom_threshold_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Bloom Threshold Layout"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                ],
-            });
-
-        let bloom_threshold_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Bloom Threshold Pipeline Layout"),
-                bind_group_layouts: &[Some(&bloom_threshold_layout)],
-                immediate_size: 0,
-            });
-
-        let bloom_threshold_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Bloom Threshold Shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../assets/shaders/bloom_threshold.wgsl").into(),
-            ),
-        });
-
-        let bloom_threshold_pipeline =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Bloom Threshold Pipeline"),
-                layout: Some(&bloom_threshold_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &bloom_threshold_shader,
-                    entry_point: Some("vs_main"),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    buffers: &[],
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &bloom_threshold_shader,
-                    entry_point: Some("fs_main"),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba16Float,
-                        blend: Some(wgpu::BlendState::REPLACE),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: None,
-                    polygon_mode: wgpu::PolygonMode::Fill,
-                    unclipped_depth: false,
-                    conservative: false,
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState {
-                    count: 1,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                multiview_mask: None,
-                cache: None,
-            });
-
-        let bloom_blur_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Bloom Blur Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-
-        let bloom_blur_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Bloom Blur Pipeline Layout"),
-                bind_group_layouts: &[Some(&bloom_blur_layout)],
-                immediate_size: 0,
-            });
-
-        let bloom_blur_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Bloom Blur Shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../assets/shaders/bloom_blur.wgsl").into(),
-            ),
-        });
-
-        let bloom_blur_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Bloom Blur Pipeline"),
-            layout: Some(&bloom_blur_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &bloom_blur_shader,
-                entry_point: Some("vs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &bloom_blur_shader,
-                entry_point: Some("fs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba16Float,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState {
-                count: 1,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview_mask: None,
-            cache: None,
-        });
-
-        let create_blur_uniform = |label, direction: glam::Vec2| {
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(label),
-                contents: bytemuck::cast_slice(&[direction.x, direction.y]),
-                usage: wgpu::BufferUsages::UNIFORM,
-            })
-        };
-        // Queue writes are applied before the encoded passes at submit time,
-        // so each separable pass needs its own immutable direction buffer.
-        let bloom_blur_buffer_x = create_blur_uniform("Bloom Blur X Uniforms", glam::Vec2::X);
-        let bloom_blur_buffer_y = create_blur_uniform("Bloom Blur Y Uniforms", glam::Vec2::Y);
+        // Bloom bright-pass + blur chain, reading from the HDR target.
+        let bloom = BloomPass::new(
+            &device,
+            surface_config.width,
+            surface_config.height,
+            &hdr_color_view,
+        );
 
         // Create bind group layouts
         let bind_group_layouts = BindGroupLayouts::new(&device);
@@ -454,81 +168,24 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        // Create default white texture
-        let default_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Default Texture"),
-            size: wgpu::Extent3d {
-                width: 4,
-                height: 4,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-
-        // Upload white pixels
-        let white_pixels = vec![255u8; 4 * 4 * 4];
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &default_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &white_pixels,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * 4),
-                rows_per_image: Some(4),
-            },
-            wgpu::Extent3d {
-                width: 4,
-                height: 4,
-                depth_or_array_layers: 1,
-            },
+        // Default white / black textures for missing material map slots.
+        let default_texture = create_solid_texture(
+            &device,
+            &queue,
+            "Default Texture",
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            4,
+            [255, 255, 255, 255],
         );
-
         let default_texture_view =
             default_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        // Create default black texture for missing emission/roughness maps.
-        let default_black_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Default Black Texture"),
-            size: wgpu::Extent3d {
-                width: 4,
-                height: 4,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let black_pixels = vec![0u8; 4 * 4 * 4];
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &default_black_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &black_pixels,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * 4),
-                rows_per_image: Some(4),
-            },
-            wgpu::Extent3d {
-                width: 4,
-                height: 4,
-                depth_or_array_layers: 1,
-            },
+        let default_black_texture = create_solid_texture(
+            &device,
+            &queue,
+            "Default Black Texture",
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            4,
+            [0, 0, 0, 0],
         );
         let default_black_texture_view =
             default_black_texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -585,38 +242,13 @@ impl Renderer {
             ..Default::default()
         });
 
-        let placeholder_brdf = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Placeholder BRDF"),
-            size: wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &placeholder_brdf,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &[128u8, 128u8, 0u8, 0u8],
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4),
-                rows_per_image: Some(1),
-            },
-            wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
+        let placeholder_brdf = create_solid_texture(
+            &device,
+            &queue,
+            "Placeholder BRDF",
+            wgpu::TextureFormat::Rgba8Unorm,
+            1,
+            [128, 128, 0, 0],
         );
         let default_brdf_view =
             placeholder_brdf.create_view(&wgpu::TextureViewDescriptor::default());
@@ -658,8 +290,8 @@ impl Renderer {
         let shadow_map = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Shadow Map"),
             size: wgpu::Extent3d {
-                width: 2048,
-                height: 2048,
+                width: SHADOW_MAP_SIZE,
+                height: SHADOW_MAP_SIZE,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -766,60 +398,41 @@ impl Renderer {
             cache: None,
         });
 
-        let global_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Global Bind Group"),
-            layout: &bind_group_layouts.global,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: global_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&default_irradiance_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&default_prefilter_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&default_brdf_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::Sampler(&ibl_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: wgpu::BindingResource::Sampler(&brdf_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: wgpu::BindingResource::TextureView(&shadow_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 7,
-                    resource: wgpu::BindingResource::Sampler(&shadow_sampler),
-                },
-            ],
-        });
+        let global_bind_group = create_global_bind_group(
+            &device,
+            &bind_group_layouts.global,
+            &global_buffer,
+            &default_irradiance_view,
+            &default_prefilter_view,
+            &default_brdf_view,
+            &ibl_sampler,
+            &brdf_sampler,
+            &shadow_view,
+            &shadow_sampler,
+        );
 
         // Shared object uniform buffer using dynamic offsets.
         let object_uniforms =
             RefCell::new(ObjectUniformState::new(&device, &bind_group_layouts.object));
 
-        // Post-processor (ACES tone mapping).
-        let post_processor =
-            super::post_process::PostProcessor::new(&device, surface_config.format);
-
-        // SSAO pass.
+        // SSAO pass (must exist before the post-processor, which samples it).
         let ssao_pass = super::ssao::SsaoPass::new(
             &device,
             &queue,
             surface_config.width,
             surface_config.height,
+            &depth_view,
         );
+
+        // Post-processor (ACES tone mapping), reading HDR + bloom + AO.
+        let post_processor = super::post_process::PostProcessor::new(
+            &device,
+            surface_config.format,
+            &hdr_color_view,
+            &bloom.view_a,
+            &ssao_pass.blur_view,
+        );
+
         let overlay = RefCell::new(super::overlay::OverlayRenderer::new(
             &device,
             &queue,
@@ -845,49 +458,64 @@ impl Renderer {
             immediate_size: 0,
         });
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("PBR Pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[Vertex::desc()],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba16Float,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState {
-                count: 1,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview_mask: None,
-            cache: None,
-        });
+        let make_pipeline =
+            |label: &str, blend: wgpu::BlendState, depth_write: bool, cull: Option<wgpu::Face>| {
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some(label),
+                    layout: Some(&pipeline_layout),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: Some("vs_main"),
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                        buffers: &[Vertex::desc()],
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: Some("fs_main"),
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: wgpu::TextureFormat::Rgba16Float,
+                            blend: Some(blend),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                    }),
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleList,
+                        strip_index_format: None,
+                        front_face: wgpu::FrontFace::Ccw,
+                        cull_mode: cull,
+                        polygon_mode: wgpu::PolygonMode::Fill,
+                        unclipped_depth: false,
+                        conservative: false,
+                    },
+                    depth_stencil: Some(wgpu::DepthStencilState {
+                        format: wgpu::TextureFormat::Depth32Float,
+                        depth_write_enabled: Some(depth_write),
+                        depth_compare: Some(wgpu::CompareFunction::Less),
+                        stencil: wgpu::StencilState::default(),
+                        bias: wgpu::DepthBiasState::default(),
+                    }),
+                    multisample: wgpu::MultisampleState {
+                        count: 1,
+                        mask: !0,
+                        alpha_to_coverage_enabled: false,
+                    },
+                    multiview_mask: None,
+                    cache: None,
+                })
+            };
+        let pipeline = make_pipeline(
+            "PBR Pipeline",
+            wgpu::BlendState::REPLACE,
+            true,
+            Some(wgpu::Face::Back),
+        );
+        let transparent_pipeline = make_pipeline(
+            "PBR Transparent Pipeline",
+            wgpu::BlendState::ALPHA_BLENDING,
+            false,
+            None,
+        );
 
         Ok(Self {
             window,
@@ -901,13 +529,13 @@ impl Renderer {
             global_bind_group,
             global_buffer,
             pipeline,
+            transparent_pipeline,
             shader,
             default_texture,
             default_texture_view,
             default_black_texture,
             default_black_texture_view,
             sampler,
-            texture_cache: HashMap::new(),
             ibl_sampler,
             brdf_sampler,
             irradiance_view: default_irradiance_view,
@@ -922,17 +550,7 @@ impl Renderer {
             shadow_bind_group,
             hdr_color_texture,
             hdr_color_view,
-            bloom_texture_a,
-            bloom_view_a,
-            bloom_texture_b,
-            bloom_view_b,
-            bloom_sampler,
-            bloom_threshold_pipeline,
-            bloom_threshold_layout,
-            bloom_blur_pipeline,
-            bloom_blur_layout,
-            bloom_blur_buffer_x,
-            bloom_blur_buffer_y,
+            bloom,
             post_processor,
             ssao_pass,
             overlay,
@@ -941,7 +559,22 @@ impl Renderer {
         })
     }
 
-    pub fn upload_texture(&mut self, texture: &Texture) -> (wgpu::Texture, wgpu::TextureView) {
+    /// Upload an RGBA8 texture with a full CPU-generated mip chain.
+    ///
+    /// `srgb` must be true for color data (albedo, emissive) and false for
+    /// data maps (normals, metallic-roughness): sampling a normal map through
+    /// an sRGB view would decode the encoded vectors and skew all lighting.
+    pub fn upload_texture(
+        &self,
+        texture: &Texture,
+        srgb: bool,
+    ) -> (wgpu::Texture, wgpu::TextureView) {
+        let format = if srgb {
+            wgpu::TextureFormat::Rgba8UnormSrgb
+        } else {
+            wgpu::TextureFormat::Rgba8Unorm
+        };
+        let mip_level_count = mip_level_count(texture.width, texture.height);
         let wgpu_texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some(&texture.name),
             size: wgpu::Extent3d {
@@ -949,33 +582,42 @@ impl Renderer {
                 height: texture.height,
                 depth_or_array_layers: 1,
             },
-            mip_level_count: 1,
+            mip_level_count,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
 
-        self.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &wgpu_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &texture.data,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * texture.width),
-                rows_per_image: Some(texture.height),
-            },
-            wgpu::Extent3d {
-                width: texture.width,
-                height: texture.height,
-                depth_or_array_layers: 1,
-            },
-        );
+        let mut level_data = texture.data.clone();
+        let (mut level_width, mut level_height) = (texture.width, texture.height);
+        for mip in 0..mip_level_count {
+            if mip > 0 {
+                level_data = downsample_rgba8(&level_data, level_width, level_height);
+                level_width = (level_width / 2).max(1);
+                level_height = (level_height / 2).max(1);
+            }
+            self.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &wgpu_texture,
+                    mip_level: mip,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &level_data,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4 * level_width),
+                    rows_per_image: Some(level_height),
+                },
+                wgpu::Extent3d {
+                    width: level_width,
+                    height: level_height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
 
         let view = wgpu_texture.create_view(&wgpu::TextureViewDescriptor::default());
         (wgpu_texture, view)
@@ -1027,37 +669,19 @@ impl Renderer {
                 .hdr_color_texture
                 .create_view(&wgpu::TextureViewDescriptor::default());
 
-            // Recreate bloom targets at half resolution.
-            let bloom_width = (width / 2).max(1);
-            let bloom_height = (height / 2).max(1);
-            let create_bloom_texture = |label| {
-                self.device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some(label),
-                    size: wgpu::Extent3d {
-                        width: bloom_width,
-                        height: bloom_height,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba16Float,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                        | wgpu::TextureUsages::TEXTURE_BINDING,
-                    view_formats: &[],
-                })
-            };
-            self.bloom_texture_a = create_bloom_texture("Bloom A");
-            self.bloom_view_a = self
-                .bloom_texture_a
-                .create_view(&wgpu::TextureViewDescriptor::default());
-            self.bloom_texture_b = create_bloom_texture("Bloom B");
-            self.bloom_view_b = self
-                .bloom_texture_b
-                .create_view(&wgpu::TextureViewDescriptor::default());
-
-            // Resize SSAO targets at half resolution.
-            self.ssao_pass.resize(&self.device, width, height);
+            // Recreate the bloom chain (its targets are half resolution) and
+            // the full-resolution SSAO targets against the new depth buffer.
+            self.bloom
+                .resize(&self.device, width, height, &self.hdr_color_view);
+            self.ssao_pass
+                .resize(&self.device, width, height, &self.depth_view);
+            // The post-processor samples HDR/bloom/AO; rebind the new targets.
+            self.post_processor.rebuild_bind_group(
+                &self.device,
+                &self.hdr_color_view,
+                &self.bloom.view_a,
+                &self.ssao_pass.blur_view,
+            );
             self.overlay.borrow_mut().resize(width, height, &self.queue);
         }
     }
@@ -1140,7 +764,10 @@ impl Renderer {
                 None
             }
             wgpu::CurrentSurfaceTexture::Lost => {
-                log::error!("Surface lost");
+                // Like `Outdated`, a lost surface must be reconfigured or every
+                // following frame fails and the window stays black permanently.
+                log::error!("Surface lost; reconfiguring");
+                self.surface.configure(&self.device, &self.surface_config);
                 None
             }
             wgpu::CurrentSurfaceTexture::Validation => {
@@ -1181,26 +808,30 @@ impl Renderer {
     }
 
     pub fn allocate_object_uniform(&self, model: Mat4) -> u32 {
-        self.object_uniforms
-            .borrow_mut()
-            .allocate(&self.queue, model)
+        self.object_uniforms.borrow_mut().allocate(model)
+    }
+
+    /// Upload the whole frame's object uniforms in a single `write_buffer`.
+    /// Call once after every draw's `allocate_object_uniform`, before submit.
+    pub fn flush_object_uniforms(&self) {
+        self.object_uniforms.borrow().flush(&self.queue);
     }
 
     fn build_material_bind_group(
         &self,
         material: &Material,
-        albedo_texture_view: Option<&wgpu::TextureView>,
-        normal_texture_view: Option<&wgpu::TextureView>,
-        emissive_texture_view: Option<&wgpu::TextureView>,
+        views: MaterialTextureViews<'_>,
     ) -> wgpu::BindGroup {
         let material_uniforms = MaterialUniforms::new(
             material.albedo_factor,
             material.metallic,
             material.roughness,
-            albedo_texture_view.is_some(),
-            normal_texture_view.is_some(),
+            views.albedo.is_some(),
+            views.normal.is_some(),
             material.emissive_factor,
-            emissive_texture_view.is_some(),
+            views.emissive.is_some(),
+            views.metallic_roughness.is_some(),
+            material.water,
         );
         let material_buffer = self
             .device
@@ -1210,9 +841,12 @@ impl Renderer {
                 usage: wgpu::BufferUsages::UNIFORM,
             });
 
-        let albedo_view = albedo_texture_view.unwrap_or(&self.default_texture_view);
-        let normal_view = normal_texture_view.unwrap_or(&self.default_texture_view);
-        let emissive_view = emissive_texture_view.unwrap_or(&self.default_black_texture_view);
+        let albedo_view = views.albedo.unwrap_or(&self.default_texture_view);
+        let normal_view = views.normal.unwrap_or(&self.default_texture_view);
+        let emissive_view = views.emissive.unwrap_or(&self.default_black_texture_view);
+        let metallic_roughness_view = views
+            .metallic_roughness
+            .unwrap_or(&self.default_texture_view);
 
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Material Bind Group"),
@@ -1238,6 +872,10 @@ impl Renderer {
                     binding: 4,
                     resource: wgpu::BindingResource::TextureView(emissive_view),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(metallic_roughness_view),
+                },
             ],
         })
     }
@@ -1246,33 +884,16 @@ impl Renderer {
         &self,
         handle: Handle<Material>,
         material: &Material,
-        albedo_texture_view: Option<&wgpu::TextureView>,
-        normal_texture_view: Option<&wgpu::TextureView>,
-        emissive_texture_view: Option<&wgpu::TextureView>,
+        views: MaterialTextureViews<'_>,
     ) -> wgpu::BindGroup {
         let mut cache = self.material_bind_groups.borrow_mut();
         if let Some(bind_group) = cache.get(&handle.id) {
             return bind_group.clone();
         }
 
-        let bind_group = self.build_material_bind_group(
-            material,
-            albedo_texture_view,
-            normal_texture_view,
-            emissive_texture_view,
-        );
+        let bind_group = self.build_material_bind_group(material, views);
         cache.insert(handle.id, bind_group.clone());
         bind_group
-    }
-
-    /// Backwards-compatible helper for code that still wants a one-off material bind group.
-    pub fn create_material_bind_group(
-        &self,
-        material: &Material,
-        albedo_texture_view: Option<&wgpu::TextureView>,
-        normal_texture_view: Option<&wgpu::TextureView>,
-    ) -> wgpu::BindGroup {
-        self.build_material_bind_group(material, albedo_texture_view, normal_texture_view, None)
     }
 
     pub fn set_ibl(&mut self, ibl: super::ibl::IblSet) {
@@ -1280,149 +901,18 @@ impl Renderer {
         self.prefilter_view = ibl.prefilter_view;
         self.brdf_lut_view = ibl.brdf_lut_view;
 
-        self.global_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Global Bind Group"),
-            layout: &self.bind_group_layouts.global,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.global_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&self.irradiance_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&self.prefilter_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&self.brdf_lut_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::Sampler(&self.ibl_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: wgpu::BindingResource::Sampler(&self.brdf_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: wgpu::BindingResource::TextureView(&self.shadow_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 7,
-                    resource: wgpu::BindingResource::Sampler(&self.shadow_sampler),
-                },
-            ],
-        });
-    }
-
-    pub fn render_bloom(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        hdr_view: &wgpu::TextureView,
-    ) -> &wgpu::TextureView {
-        // Threshold pass: HDR -> bloom A
-        {
-            let threshold_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Bloom Threshold Bind Group"),
-                layout: &self.bloom_threshold_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(hdr_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&self.bloom_sampler),
-                    },
-                ],
-            });
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Bloom Threshold Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.bloom_view_a,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.bloom_threshold_pipeline);
-            pass.set_bind_group(0, &threshold_bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
-
-        // Blur passes: A -> B -> A
-        self.dispatch_blur(
-            encoder,
-            &self.bloom_view_a,
-            &self.bloom_view_b,
-            &self.bloom_blur_buffer_x,
+        self.global_bind_group = create_global_bind_group(
+            &self.device,
+            &self.bind_group_layouts.global,
+            &self.global_buffer,
+            &self.irradiance_view,
+            &self.prefilter_view,
+            &self.brdf_lut_view,
+            &self.ibl_sampler,
+            &self.brdf_sampler,
+            &self.shadow_view,
+            &self.shadow_sampler,
         );
-        self.dispatch_blur(
-            encoder,
-            &self.bloom_view_b,
-            &self.bloom_view_a,
-            &self.bloom_blur_buffer_y,
-        );
-
-        &self.bloom_view_a
-    }
-
-    fn dispatch_blur(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        input: &wgpu::TextureView,
-        output: &wgpu::TextureView,
-        blur_uniform: &wgpu::Buffer,
-    ) {
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Bloom Blur Bind Group"),
-            layout: &self.bloom_blur_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: blur_uniform.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(input),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.bloom_sampler),
-                },
-            ],
-        });
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Bloom Blur Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: output,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        pass.set_pipeline(&self.bloom_blur_pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
-        pass.draw(0..3, 0..1);
     }
 
     pub fn create_render_pass<'a>(
@@ -1455,8 +945,167 @@ impl Renderer {
             multiview_mask: None,
         })
     }
+}
 
-    pub fn end_frame(&self, output: wgpu::SurfaceTexture) {
-        output.present();
+/// Create a `size`×`size` single-color texture (used for material map
+/// fallbacks and the placeholder BRDF LUT).
+fn create_solid_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+    format: wgpu::TextureFormat,
+    size: u32,
+    rgba: [u8; 4],
+) -> wgpu::Texture {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width: size,
+            height: size,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let pixels: Vec<u8> = rgba
+        .iter()
+        .copied()
+        .cycle()
+        .take((size * size * 4) as usize)
+        .collect();
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &pixels,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4 * size),
+            rows_per_image: Some(size),
+        },
+        wgpu::Extent3d {
+            width: size,
+            height: size,
+            depth_or_array_layers: 1,
+        },
+    );
+    texture
+}
+
+fn mip_level_count(width: u32, height: u32) -> u32 {
+    32 - width.max(height).max(1).leading_zeros()
+}
+
+/// Box-filter one RGBA8 mip level down to the next. Simple and CPU-side, but
+/// only runs once per texture at load time.
+fn downsample_rgba8(src: &[u8], src_width: u32, src_height: u32) -> Vec<u8> {
+    let dst_width = (src_width / 2).max(1);
+    let dst_height = (src_height / 2).max(1);
+    let mut dst = vec![0u8; (dst_width * dst_height * 4) as usize];
+    for y in 0..dst_height {
+        for x in 0..dst_width {
+            // Clamp source coordinates so odd dimensions stay in bounds.
+            let sx0 = (x * 2).min(src_width - 1);
+            let sx1 = (x * 2 + 1).min(src_width - 1);
+            let sy0 = (y * 2).min(src_height - 1);
+            let sy1 = (y * 2 + 1).min(src_height - 1);
+            for channel in 0..4 {
+                let sum = src[((sy0 * src_width + sx0) * 4 + channel) as usize] as u32
+                    + src[((sy0 * src_width + sx1) * 4 + channel) as usize] as u32
+                    + src[((sy1 * src_width + sx0) * 4 + channel) as usize] as u32
+                    + src[((sy1 * src_width + sx1) * 4 + channel) as usize] as u32;
+                dst[((y * dst_width + x) * 4 + channel) as usize] = (sum / 4) as u8;
+            }
+        }
+    }
+    dst
+}
+
+/// The global bind group is identical between startup (placeholder IBL) and
+/// `set_ibl` (generated IBL); build it in one place.
+#[allow(clippy::too_many_arguments)]
+fn create_global_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    global_buffer: &wgpu::Buffer,
+    irradiance_view: &wgpu::TextureView,
+    prefilter_view: &wgpu::TextureView,
+    brdf_lut_view: &wgpu::TextureView,
+    ibl_sampler: &wgpu::Sampler,
+    brdf_sampler: &wgpu::Sampler,
+    shadow_view: &wgpu::TextureView,
+    shadow_sampler: &wgpu::Sampler,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Global Bind Group"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: global_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(irradiance_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(prefilter_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(brdf_lut_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::Sampler(ibl_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::Sampler(brdf_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: wgpu::BindingResource::TextureView(shadow_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: wgpu::BindingResource::Sampler(shadow_sampler),
+            },
+        ],
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SHADOW_MAP_SIZE;
+    use crate::renderer::bind_groups::MAX_LIGHTS;
+
+    /// pbr.wgsl declares the same constants; a silent mismatch would skew PCF
+    /// filtering or drop lights, so keep the shader source in sync.
+    #[test]
+    fn pbr_shader_constants_match_the_rust_side() {
+        let source = include_str!("../../assets/shaders/pbr.wgsl");
+        assert!(
+            source.contains(&format!("const MAX_LIGHTS: u32 = {MAX_LIGHTS}u;")),
+            "pbr.wgsl MAX_LIGHTS diverged from bind_groups::MAX_LIGHTS"
+        );
+        assert!(
+            source.contains(&format!(
+                "const SHADOW_MAP_SIZE: f32 = {SHADOW_MAP_SIZE}.0;"
+            )),
+            "pbr.wgsl SHADOW_MAP_SIZE diverged from renderer::SHADOW_MAP_SIZE"
+        );
+        assert!(
+            source.contains("array<Light, MAX_LIGHTS>"),
+            "pbr.wgsl light array must be sized by MAX_LIGHTS"
+        );
     }
 }

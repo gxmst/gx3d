@@ -147,7 +147,6 @@ fn throwing_held_body_applies_impulse_and_releases_it() {
 #[test]
 fn freeze_toggles_body_type() {
     let mut physics = PhysicsWorld::default();
-    let sandbox = PhysicsSandbox::default();
 
     let shape = PhysicsShape::Cuboid {
         half_extents: Vec3::splat(0.5),
@@ -155,11 +154,11 @@ fn freeze_toggles_body_type() {
     let (rb, _col) =
         physics.add_dynamic_body(Vec3::new(0.0, 1.0, 0.0), shape.to_rapier_collider(), 1.0);
 
-    assert!(!sandbox.is_frozen(&physics, rb));
-    sandbox.freeze(&mut physics, rb);
-    assert!(sandbox.is_frozen(&physics, rb));
-    sandbox.unfreeze(&mut physics, rb);
-    assert!(!sandbox.is_frozen(&physics, rb));
+    assert!(!physics.body_is_frozen(rb));
+    physics.freeze_body(rb);
+    assert!(physics.body_is_frozen(rb));
+    physics.unfreeze_body(rb);
+    assert!(!physics.body_is_frozen(rb));
 }
 
 #[test]

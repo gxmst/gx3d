@@ -84,7 +84,9 @@ impl Mesh {
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(&format!("{} Vertex Buffer", self.name)),
                 contents: bytemuck::cast_slice(&self.vertices),
-                usage: wgpu::BufferUsages::VERTEX,
+                // COPY_DST allows animated meshes (water surface) to re-upload
+                // vertices in place each frame.
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             }),
         );
 

@@ -5,7 +5,7 @@ use crate::renderer::{Camera, RenderMesh};
 use glam::{Quat, Vec3};
 
 use super::{
-    EnemyFlashMaterial, HitFlash, HitMarkerTimer, MenuState, MuzzleFlashTimer, TimedEffect,
+    EnemyFlashMaterial, HitFlash, HitMarkerTimer, MuzzleFlashTimer, TimedEffect,
     WeaponFeedbackAssets,
 };
 
@@ -22,6 +22,12 @@ pub fn update_system(world: &mut EngineWorld, resources: &Resources) {
     {
         let mut model = resources.expect_mut::<WeaponModel>();
         model.update_aim(aiming, real_dt);
+        let weapon_ref = resources.expect::<Weapon>();
+        model.update_reload(
+            weapon_ref.is_reloading,
+            weapon_ref.reload_timer,
+            weapon_ref.reload_duration,
+        );
     }
 
     {
@@ -35,18 +41,22 @@ pub fn update_system(world: &mut EngineWorld, resources: &Resources) {
     }
     update_timed_effects(world, dt);
 
-    let menu_open = resources
-        .get::<MenuState>()
-        .map(|menu| menu.0.open)
+    let buy_open = resources
+        .get::<super::buy_menu::BuyState>()
+        .map(|buy| buy.open)
         .unwrap_or(false);
-    if menu_open {
+    let spectating = resources
+        .get::<super::match_mode::MatchState>()
+        .map(|state| state.player_spectating)
+        .unwrap_or(false);
+    if super::menu_open(resources) || buy_open || spectating {
         update_weapon_model(resources, dt);
         return;
     }
 
     let fired: bool;
     {
-        let input = resources.expect::<crate::input::InputState>().clone();
+        let input = resources.expect::<crate::input::InputState>();
         let mut weapon = resources.expect_mut::<Weapon>();
         fired = weapon.update(dt, &input);
     }
@@ -56,7 +66,7 @@ pub fn update_system(world: &mut EngineWorld, resources: &Resources) {
             let weapon_ref = resources.expect::<Weapon>();
             (
                 weapon_ref.get_recoil() * if aiming { 0.62 } else { 1.0 },
-                weapon_ref.damage,
+                weapon_ref.volley_damage(),
             )
         };
         {
@@ -69,20 +79,12 @@ pub fn update_system(world: &mut EngineWorld, resources: &Resources) {
         }
         {
             let mut timer = resources.expect_mut::<MuzzleFlashTimer>();
-            timer.0 = 0.06;
+            timer.0 = super::MUZZLE_FLASH_SECONDS;
         }
 
-        let (camera_pos, camera_forward) = {
-            let camera = resources.expect::<Camera>();
-            (camera.position, camera.forward())
-        };
+        let camera_forward = resources.expect::<Camera>().forward();
         {
-            let ray = Ray::new(camera_pos, camera_forward, 100.0);
-            let hit = {
-                let physics = resources.expect::<PhysicsWorld>();
-                let player_body = resources.expect::<super::PlayerBody>().0;
-                physics.cast_ray_excluding_body(&ray, player_body)
-            };
+            let hit = super::crosshair_raycast(resources, 100.0);
             if let Some(hit) = hit {
                 if let Some(mut timer) = resources.get_mut::<HitMarkerTimer>() {
                     timer.0 = if hit.entity.is_some() { 0.16 } else { 0.09 };
@@ -90,6 +92,28 @@ pub fn update_system(world: &mut EngineWorld, resources: &Resources) {
                 if let Some(entity) = hit.entity {
                     if world.ecs.get::<&Explosive>(entity).is_ok() {
                         detonate_explosive(world, resources, entity);
+                    } else if world
+                        .ecs
+                        .get::<&crate::game::DestructibleBlock>(entity)
+                        .is_ok()
+                    {
+                        // Structure blocks: bullets chip single blocks loose.
+                        let mut physics = resources.expect_mut::<PhysicsWorld>();
+                        super::effects::try_break_block(
+                            world,
+                            &mut physics,
+                            entity,
+                            camera_forward.normalize_or_zero() * 14.0,
+                            hit.point,
+                        );
+                    } else if world
+                        .ecs
+                        .get::<&crate::game::BotBrain>(entity)
+                        .map(|brain| brain.team == crate::game::Team::Alpha)
+                        .unwrap_or(false)
+                    {
+                        // Friendly fire off: teammates absorb the shot without
+                        // damage (spark feedback still shows).
                     } else if world.ecs.get::<&EnemyAI>(entity).is_ok() {
                         react_enemy_hit(
                             world,
@@ -106,13 +130,18 @@ pub fn update_system(world: &mut EngineWorld, resources: &Resources) {
                     // no ECS mapping exists. Keep physical hit feedback robust.
                     react_physics_hit(world, resources, &hit, camera_forward);
                 }
-                spawn_hit_feedback(world, resources, hit.point, hit.normal);
+                // The 12s bullet-hole decal only makes sense on surfaces that
+                // cannot move: a hole left at the hit point of a dynamic prop,
+                // door, or enemy floats in the air once the target moves or
+                // despawns. Dynamic hits keep the brief spark only.
+                let surface_is_static = surface_static_for_decal(world, resources, &hit);
+                spawn_hit_feedback(world, resources, hit.point, hit.normal, surface_is_static);
             }
         }
 
         if let Some(mut audio) = resources.get_mut::<Option<crate::audio::AudioSystem>>() {
             if let Some(ref mut a) = *audio {
-                let _ = a.play_sound(crate::audio::AudioSystem::create_gunshot());
+                a.play_gunshot();
             }
         }
     }
@@ -141,8 +170,29 @@ fn detonate_explosive(world: &mut EngineWorld, resources: &Resources, entity: he
         .map(|(transform, body)| (transform.position, body.rigid_body_handle))
         .collect();
 
+    // Frozen structure blocks inside the blast radius break loose first, so
+    // the impulse loop below treats them like any other dynamic body.
+    let frozen_blocks: Vec<rapier3d::prelude::RigidBodyHandle> = world
+        .ecs
+        .query::<(&Transform, &PhysicsBody, &crate::game::DestructibleBlock)>()
+        .iter()
+        .filter(|(transform, _, _)| transform.position.distance(origin) <= radius)
+        .map(|(_, body, _)| body.rigid_body_handle)
+        .collect();
+
     {
         let mut physics = resources.expect_mut::<PhysicsWorld>();
+        for handle in frozen_blocks {
+            if explosion_reaches_body(
+                &physics,
+                origin,
+                source_body,
+                handle,
+                physics.get_body_position(handle).unwrap_or(origin),
+            ) {
+                physics.unfreeze_body(handle);
+            }
+        }
         for (fallback_position, body_handle) in affected {
             if Some(body_handle) == source_body {
                 continue;
@@ -204,7 +254,7 @@ fn detonate_explosive(world: &mut EngineWorld, resources: &Resources, entity: he
     spawn_explosion_burst(world, resources, origin, radius);
     if let Some(mut audio) = resources.get_mut::<Option<crate::audio::AudioSystem>>() {
         if let Some(ref mut audio) = *audio {
-            let _ = audio.play_sound(crate::audio::AudioSystem::create_explosion());
+            audio.play_explosion();
         }
     }
 }
@@ -345,10 +395,36 @@ fn react_enemy_hit(
     shot_dir: Vec3,
 ) {
     // Damage + stagger on the AI.
+    let mut killed = false;
     if let Ok(mut ai) = world.ecs.get::<&mut EnemyAI>(entity) {
+        let was_alive = ai.is_alive;
         ai.take_damage(damage);
         ai.stagger_timer = 0.18;
-        log::info!("Enemy hit! HP: {:.1}", ai.health);
+        killed = was_alive && !ai.is_alive;
+        log::debug!("Enemy hit! HP: {:.1}", ai.health);
+    }
+    if killed {
+        if let Some(mut buy) = resources.get_mut::<super::buy_menu::BuyState>() {
+            if buy.economy_enabled {
+                buy.award(super::buy_menu::KILL_REWARD);
+            }
+        }
+        // Scoreboard: player kill + victim death (match mode only).
+        let victim_stat = world
+            .ecs
+            .get::<&crate::game::BotBrain>(entity)
+            .map(|brain| brain.stat_index)
+            .ok();
+        if let Some(mut state) = resources.get_mut::<super::match_mode::MatchState>() {
+            if let Some(entry) = state.stats.get_mut(super::match_mode::PLAYER_STAT) {
+                entry.kills += 1;
+            }
+            if let Some(victim) = victim_stat {
+                if let Some(entry) = state.stats.get_mut(victim) {
+                    entry.deaths += 1;
+                }
+            }
+        }
     }
 
     // Nudge the enemy along the shot direction so the hit reads as impact.
@@ -386,33 +462,82 @@ fn react_enemy_hit(
     }
 }
 
-fn spawn_hit_feedback(world: &mut EngineWorld, resources: &Resources, point: Vec3, normal: Vec3) {
+/// Whether the hit surface is immovable level geometry, i.e. safe to carry a
+/// long-lived bullet-hole decal. Checks the ECS `PhysicsBody` marker when the
+/// collider maps to an entity (doors are kinematic → not static), and falls
+/// back to Rapier's body type for unmapped colliders.
+fn surface_static_for_decal(
+    world: &EngineWorld,
+    resources: &Resources,
+    hit: &crate::physics::RaycastHit,
+) -> bool {
+    if let Some(entity) = hit.entity {
+        // Destructible blocks are Fixed in Rapier while frozen but can break
+        // loose at any moment; never decal them.
+        if world
+            .ecs
+            .get::<&crate::game::DestructibleBlock>(entity)
+            .is_ok()
+        {
+            return false;
+        }
+        // Doors and enemies are kinematic, but their ECS `PhysicsBody` marker
+        // records `is_static: true`; check the components explicitly.
+        if world.ecs.get::<&crate::game::ToggleDoor>(entity).is_ok()
+            || world.ecs.get::<&EnemyAI>(entity).is_ok()
+        {
+            return false;
+        }
+        return world
+            .ecs
+            .get::<&PhysicsBody>(entity)
+            .map(|body| body.is_static)
+            .unwrap_or(false);
+    }
+    let physics = resources.expect::<PhysicsWorld>();
+    physics
+        .collider_body(hit.collider_handle)
+        .and_then(|handle| physics.rigid_body_set.get(handle))
+        .map(|body| body.is_fixed())
+        .unwrap_or(false)
+}
+
+fn spawn_hit_feedback(
+    world: &mut EngineWorld,
+    resources: &Resources,
+    point: Vec3,
+    normal: Vec3,
+    surface_is_static: bool,
+) {
     let assets = resources.expect::<WeaponFeedbackAssets>();
     let normal = normal.normalize_or_zero();
-    let base_rotation = Quat::from_rotation_arc(Vec3::Y, normal);
-    let random_roll = ((point.dot(Vec3::new(12.9898, 78.233, 37.719)).sin() * 43_758.547)
-        .fract()
-        .abs())
-        * std::f32::consts::TAU;
-    let rotation = base_rotation * Quat::from_rotation_y(random_roll);
 
-    let bullet_hole = world.spawn();
-    world.add_component(
-        bullet_hole,
-        Transform::new(
-            point + normal * 0.012,
-            rotation,
-            Vec3::new(0.16, 0.006, 0.16),
-        ),
-    );
-    world.add_component(
-        bullet_hole,
-        RenderMesh {
-            mesh: assets.bullet_hole_mesh,
-            material: assets.bullet_hole_material,
-        },
-    );
-    world.add_component(bullet_hole, TimedEffect { remaining: 12.0 });
+    if surface_is_static {
+        let base_rotation = Quat::from_rotation_arc(Vec3::Y, normal);
+        let random_roll = ((point.dot(Vec3::new(12.9898, 78.233, 37.719)).sin() * 43_758.547)
+            .fract()
+            .abs())
+            * std::f32::consts::TAU;
+        let rotation = base_rotation * Quat::from_rotation_y(random_roll);
+
+        let bullet_hole = world.spawn();
+        world.add_component(
+            bullet_hole,
+            Transform::new(
+                point + normal * 0.012,
+                rotation,
+                Vec3::new(0.16, 0.006, 0.16),
+            ),
+        );
+        world.add_component(
+            bullet_hole,
+            RenderMesh {
+                mesh: assets.bullet_hole_mesh,
+                material: assets.bullet_hole_material,
+            },
+        );
+        world.add_component(bullet_hole, TimedEffect { remaining: 12.0 });
+    }
 
     let impact = world.spawn();
     world.add_component(

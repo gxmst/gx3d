@@ -5,11 +5,7 @@ use winit::keyboard::KeyCode;
 const SPEEDS: [f32; 5] = [0.1, 0.25, 0.5, 1.0, 2.0];
 
 pub fn system(_world: &mut EngineWorld, resources: &Resources) {
-    if resources
-        .get::<super::MenuState>()
-        .map(|menu| menu.0.open)
-        .unwrap_or(false)
-    {
+    if super::menu_open(resources) {
         return;
     }
 
@@ -40,12 +36,7 @@ pub fn system(_world: &mut EngineWorld, resources: &Resources) {
         let nearest = SPEEDS
             .iter()
             .enumerate()
-            .min_by(|(_, a), (_, b)| {
-                (**a - current)
-                    .abs()
-                    .partial_cmp(&(**b - current).abs())
-                    .unwrap()
-            })
+            .min_by(|(_, a), (_, b)| (**a - current).abs().total_cmp(&(**b - current).abs()))
             .map(|(index, _)| index)
             .unwrap_or(3);
         let next = if slower {

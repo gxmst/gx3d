@@ -83,38 +83,6 @@ impl PhysicsWorld {
                 }
             })
     }
-
-    pub fn cast_ray_all(&self, ray: &Ray) -> Vec<RaycastHit> {
-        if !ray.is_valid() {
-            return Vec::new();
-        }
-        let rapier_ray = ray.to_rapier();
-        let filter = QueryFilter::default();
-        let query_pipeline = self.broad_phase.as_query_pipeline(
-            self.narrow_phase.query_dispatcher(),
-            &self.rigid_body_set,
-            &self.collider_set,
-            filter,
-        );
-
-        let mut results: Vec<RaycastHit> = query_pipeline
-            .intersect_ray(rapier_ray, ray.max_distance, true)
-            .map(|(handle, _collider, intersection)| {
-                let point = rapier_ray.point_at(intersection.time_of_impact);
-                let normal = intersection.normal;
-                RaycastHit {
-                    point: vector_to_glam(point),
-                    normal: vector_to_glam(normal),
-                    distance: intersection.time_of_impact,
-                    entity: self.collider_entity_map.get(&handle).copied(),
-                    collider_handle: handle,
-                }
-            })
-            .collect();
-
-        results.sort_by(|a, b| a.distance.total_cmp(&b.distance));
-        results
-    }
 }
 
 #[cfg(test)]
@@ -132,7 +100,6 @@ mod tests {
             Ray::new(Vec3::splat(f32::INFINITY), Vec3::Z, 10.0),
         ] {
             assert!(physics.cast_ray(&ray).is_none());
-            assert!(physics.cast_ray_all(&ray).is_empty());
         }
     }
 }

@@ -1,7 +1,7 @@
 use crate::core::{EngineWorld, Transform};
 use crate::physics::{PhysicsBody, PhysicsMaterial, PhysicsShape, PhysicsWorld, Ray, RaycastHit};
 use glam::Vec3;
-use rapier3d::prelude::{RigidBodyHandle, RigidBodyType};
+use rapier3d::prelude::RigidBodyHandle;
 use std::collections::VecDeque;
 
 #[derive(Debug)]
@@ -220,11 +220,8 @@ impl PhysicsSandbox {
         let Some(body) = self.held_body.take() else {
             return false;
         };
-        if let Some(rb) = physics.rigid_body_set.get_mut(body) {
-            if rb.is_fixed() {
-                rb.set_body_type(RigidBodyType::Dynamic, true);
-            }
-        }
+        // A frozen prop can be held; make it dynamic again before launching.
+        physics.unfreeze_body(body);
         physics.apply_impulse(body, camera_forward.normalize_or_zero() * strength);
         true
     }
@@ -277,28 +274,6 @@ impl PhysicsSandbox {
             rb.set_linvel(next_velocity, true);
             rb.set_angvel(rb.angvel() * 0.72, true);
         }
-    }
-
-    pub fn freeze(&self, physics: &mut PhysicsWorld, body: RigidBodyHandle) {
-        if let Some(rb) = physics.rigid_body_set.get_mut(body) {
-            rb.set_body_type(RigidBodyType::Fixed, true);
-            rb.set_linvel(Vec3::ZERO, true);
-            rb.set_angvel(Vec3::ZERO, true);
-        }
-    }
-
-    pub fn unfreeze(&self, physics: &mut PhysicsWorld, body: RigidBodyHandle) {
-        if let Some(rb) = physics.rigid_body_set.get_mut(body) {
-            rb.set_body_type(RigidBodyType::Dynamic, true);
-        }
-    }
-
-    pub fn is_frozen(&self, physics: &PhysicsWorld, body: RigidBodyHandle) -> bool {
-        physics
-            .rigid_body_set
-            .get(body)
-            .map(|rb| rb.is_fixed())
-            .unwrap_or(false)
     }
 }
 

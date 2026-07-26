@@ -8,11 +8,19 @@ use winit::event::MouseButton;
 use winit::keyboard::KeyCode;
 
 pub fn system(world: &mut EngineWorld, resources: &Resources) {
-    if resources
-        .get::<super::MenuState>()
-        .map(|menu| menu.0.open)
-        .unwrap_or(false)
-    {
+    if super::menu_open(resources) {
+        return;
+    }
+    // Buy menu captures input; spectators cannot manipulate the sandbox.
+    let buy_open = resources
+        .get::<super::buy_menu::BuyState>()
+        .map(|buy| buy.open)
+        .unwrap_or(false);
+    let spectating = resources
+        .get::<super::match_mode::MatchState>()
+        .map(|state| state.player_spectating)
+        .unwrap_or(false);
+    if buy_open || spectating {
         return;
     }
 
@@ -29,7 +37,8 @@ pub fn system(world: &mut EngineWorld, resources: &Resources) {
         let input = resources.expect::<InputState>();
         (
             input.is_key_just_pressed(KeyCode::KeyG),
-            input.is_key_just_pressed(KeyCode::KeyB),
+            // N spawns the bouncy ball; B is the buy menu everywhere.
+            input.is_key_just_pressed(KeyCode::KeyN),
             input.is_key_just_pressed(KeyCode::KeyH),
             input.is_mouse_just_pressed(MouseButton::Middle)
                 || input.is_key_just_pressed(KeyCode::KeyE),
@@ -46,17 +55,20 @@ pub fn system(world: &mut EngineWorld, resources: &Resources) {
 
     let ray = Ray::new(camera_pos, camera_forward, 10.0);
     let player_body = resources.expect::<super::PlayerBody>().0;
-    let spawn_position = {
-        let physics = resources.expect::<PhysicsWorld>();
-        let distance = physics
-            .cast_ray_excluding_body(&Ray::new(camera_pos, camera_forward, 3.8), player_body)
-            .map(|hit| (hit.distance - 0.8).min(3.0))
-            .unwrap_or(3.0);
-        (distance >= 1.4).then_some(camera_pos + camera_forward * distance)
-    };
-    let mut sandbox = resources
-        .remove::<PhysicsSandbox>()
-        .expect("Sandbox missing");
+    // Only probe for clear space when a spawn key was actually pressed; this
+    // raycast is not needed on ordinary frames.
+    let wants_spawn = spawn_box || spawn_bouncy || spawn_heavy;
+    let spawn_position = wants_spawn
+        .then(|| {
+            let physics = resources.expect::<PhysicsWorld>();
+            let distance = physics
+                .cast_ray_excluding_body(&Ray::new(camera_pos, camera_forward, 3.8), player_body)
+                .map(|hit| (hit.distance - 0.8).min(3.0))
+                .unwrap_or(3.0);
+            (distance >= 1.4).then_some(camera_pos + camera_forward * distance)
+        })
+        .flatten();
+    let mut sandbox = resources.expect_mut::<PhysicsSandbox>();
 
     {
         let mut physics = resources.expect_mut::<PhysicsWorld>();
@@ -133,19 +145,14 @@ pub fn system(world: &mut EngineWorld, resources: &Resources) {
         }
 
         if toggle_freeze {
-            if let Some(body) = sandbox.held_body {
-                if sandbox.is_frozen(&physics, body) {
-                    sandbox.unfreeze(&mut physics, body);
+            let target = sandbox
+                .held_body
+                .or_else(|| sandbox.ray_pick_excluding(world, &physics, &ray, player_body));
+            if let Some(body) = target {
+                if physics.body_is_frozen(body) {
+                    physics.unfreeze_body(body);
                 } else {
-                    sandbox.freeze(&mut physics, body);
-                }
-            } else if let Some(body) =
-                sandbox.ray_pick_excluding(world, &physics, &ray, player_body)
-            {
-                if sandbox.is_frozen(&physics, body) {
-                    sandbox.unfreeze(&mut physics, body);
-                } else {
-                    sandbox.freeze(&mut physics, body);
+                    physics.freeze_body(body);
                 }
             }
         }
@@ -180,8 +187,6 @@ pub fn system(world: &mut EngineWorld, resources: &Resources) {
             }
         }
     }
-
-    resources.insert(sandbox);
 }
 
 /// Advance the held-prop servo on the same fixed clock as Rapier. This keeps
@@ -192,12 +197,9 @@ pub fn fixed_update(_world: &mut EngineWorld, resources: &Resources) {
         (camera.position, camera.forward())
     };
     let player_body = resources.expect::<super::PlayerBody>().0;
-    let mut sandbox = resources
-        .remove::<PhysicsSandbox>()
-        .expect("Sandbox missing");
+    let mut sandbox = resources.expect_mut::<PhysicsSandbox>();
     if sandbox.held_body.is_some() {
         let mut physics = resources.expect_mut::<PhysicsWorld>();
         sandbox.update_hold_excluding(&mut physics, camera_pos, camera_forward, Some(player_body));
     }
-    resources.insert(sandbox);
 }

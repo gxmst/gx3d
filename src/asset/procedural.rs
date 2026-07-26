@@ -273,6 +273,298 @@ impl ProceduralGenerator {
         Mesh::new("Cylinder", vertices, indices)
     }
 
+    /// Compact sidearm: short slide over a grip frame, stubby barrel.
+    pub fn create_pistol() -> Mesh {
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        // Slide (top) and frame (below it).
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, 0.05, -0.05),
+            Vec3::new(0.075, 0.05, 0.24),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, -0.02, -0.02),
+            Vec3::new(0.065, 0.03, 0.19),
+        );
+        // Short exposed muzzle.
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, 0.05, -0.33),
+            Vec3::new(0.035, 0.035, 0.05),
+        );
+        // Raked grip with a magazine base poking out.
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, -0.15, 0.12),
+            Vec3::new(0.06, 0.13, 0.075),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, -0.285, 0.13),
+            Vec3::new(0.07, 0.02, 0.085),
+        );
+        // Trigger guard loop (front bar + bottom bar).
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, -0.075, -0.045),
+            Vec3::new(0.02, 0.055, 0.018),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, -0.125, 0.015),
+            Vec3::new(0.02, 0.014, 0.08),
+        );
+        // Front/rear sights.
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, 0.115, -0.26),
+            Vec3::new(0.012, 0.018, 0.012),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, 0.115, 0.16),
+            Vec3::new(0.03, 0.018, 0.014),
+        );
+        Mesh::new("Pistol", vertices, indices)
+    }
+
+    /// Stubby SMG: boxy receiver, long magazine well forward of the grip,
+    /// wire-frame style stock silhouette.
+    pub fn create_smg() -> Mesh {
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        // Receiver.
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, 0.02, -0.08),
+            Vec3::new(0.09, 0.07, 0.30),
+        );
+        // Short barrel with a chunky shroud.
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, 0.03, -0.44),
+            Vec3::new(0.05, 0.05, 0.09),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, 0.03, -0.56),
+            Vec3::new(0.028, 0.028, 0.06),
+        );
+        // Long stick magazine angled slightly forward, ahead of the grip.
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, -0.17, -0.16),
+            Vec3::new(0.038, 0.16, 0.055),
+        );
+        // Pistol grip.
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, -0.14, 0.14),
+            Vec3::new(0.05, 0.12, 0.06),
+        );
+        // Skeleton stock: two thin bars meeting a butt plate.
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, 0.05, 0.32),
+            Vec3::new(0.022, 0.022, 0.13),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, -0.02, 0.44),
+            Vec3::new(0.022, 0.09, 0.022),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, -0.02, 0.47),
+            Vec3::new(0.05, 0.11, 0.02),
+        );
+        // Sights.
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, 0.11, -0.38),
+            Vec3::new(0.014, 0.022, 0.014),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, 0.11, 0.1),
+            Vec3::new(0.04, 0.022, 0.016),
+        );
+        Mesh::new("SMG", vertices, indices)
+    }
+
+    /// Long marksman rifle: extended heavy barrel, scope tube on tall rings,
+    /// full stock with a cheek riser.
+    pub fn create_marksman_rifle() -> Mesh {
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        // Receiver.
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, 0.0, 0.02),
+            Vec3::new(0.08, 0.065, 0.26),
+        );
+        // Long tapered barrel (two segments) + muzzle brake.
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, 0.02, -0.52),
+            Vec3::new(0.035, 0.035, 0.30),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, 0.02, -0.86),
+            Vec3::new(0.028, 0.028, 0.10),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, 0.02, -0.98),
+            Vec3::new(0.045, 0.045, 0.035),
+        );
+        // Scope: main tube + objective bell + two mounting rings.
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, 0.145, -0.10),
+            Vec3::new(0.038, 0.038, 0.17),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, 0.145, -0.30),
+            Vec3::new(0.05, 0.05, 0.045),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, 0.09, -0.16),
+            Vec3::new(0.02, 0.03, 0.02),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, 0.09, 0.0),
+            Vec3::new(0.02, 0.03, 0.02),
+        );
+        // Box magazine.
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, -0.12, -0.08),
+            Vec3::new(0.04, 0.075, 0.06),
+        );
+        // Grip and full stock with cheek riser + butt.
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, -0.14, 0.15),
+            Vec3::new(0.05, 0.12, 0.06),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, -0.01, 0.38),
+            Vec3::new(0.055, 0.05, 0.20),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, 0.065, 0.42),
+            Vec3::new(0.045, 0.025, 0.12),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, -0.03, 0.585),
+            Vec3::new(0.06, 0.10, 0.025),
+        );
+        Mesh::new("Marksman Rifle", vertices, indices)
+    }
+
+    /// Pump shotgun: fat receiver, tube magazine under the barrel, pump
+    /// foregrip, shoulder stock.
+    pub fn create_shotgun() -> Mesh {
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        // Receiver.
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, 0.01, 0.05),
+            Vec3::new(0.085, 0.075, 0.22),
+        );
+        // Barrel and the parallel tube magazine right under it.
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, 0.05, -0.45),
+            Vec3::new(0.032, 0.032, 0.34),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, -0.02, -0.42),
+            Vec3::new(0.028, 0.028, 0.30),
+        );
+        // Pump foregrip sleeve around the mag tube.
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, -0.02, -0.33),
+            Vec3::new(0.055, 0.05, 0.10),
+        );
+        // Bead sight at the muzzle.
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, 0.095, -0.77),
+            Vec3::new(0.012, 0.014, 0.012),
+        );
+        // Grip + broad stock.
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, -0.13, 0.20),
+            Vec3::new(0.05, 0.11, 0.065),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, -0.02, 0.40),
+            Vec3::new(0.06, 0.06, 0.17),
+        );
+        add_box(
+            &mut vertices,
+            &mut indices,
+            Vec3::new(0.0, -0.035, 0.575),
+            Vec3::new(0.065, 0.105, 0.025),
+        );
+        Mesh::new("Shotgun", vertices, indices)
+    }
+
     pub fn create_rifle() -> Mesh {
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
@@ -505,36 +797,6 @@ impl ProceduralGenerator {
             Vec3::new(0.14, 0.12, 0.16),
         );
         Mesh::new("Humanoid", vertices, indices)
-    }
-
-    pub fn create_checkerboard_texture(size: u32, grid_size: u32) -> super::Texture {
-        let mut data = Vec::with_capacity((size * size * 4) as usize);
-
-        for y in 0..size {
-            for x in 0..size {
-                let is_white = ((x / grid_size) + (y / grid_size)).is_multiple_of(2);
-                let color = if is_white { 255u8 } else { 0u8 };
-                data.push(color);
-                data.push(color);
-                data.push(color);
-                data.push(255);
-            }
-        }
-
-        super::Texture::from_rgba8("Checkerboard", size, size, data)
-    }
-
-    pub fn create_flat_normal_texture(size: u32) -> super::Texture {
-        let mut data = Vec::with_capacity((size * size * 4) as usize);
-
-        for _ in 0..(size * size) {
-            data.push(128); // R
-            data.push(128); // G
-            data.push(255); // B
-            data.push(255); // A
-        }
-
-        super::Texture::from_rgba8("FlatNormal", size, size, data)
     }
 }
 

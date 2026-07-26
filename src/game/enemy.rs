@@ -2,6 +2,48 @@ use crate::core::Transform;
 use glam::Vec3;
 use hecs::Entity;
 
+/// Which side an actor fights for in match mode. The player is Alpha.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Team {
+    Alpha,
+    Bravo,
+}
+
+impl Team {
+    pub fn opponent(self) -> Team {
+        match self {
+            Team::Alpha => Team::Bravo,
+            Team::Bravo => Team::Alpha,
+        }
+    }
+}
+
+/// Per-bot combat memory used by the match AI on top of `EnemyAI` movement.
+#[derive(Debug, Clone)]
+pub struct BotBrain {
+    pub team: Team,
+    /// Where this bot respawns each round.
+    pub home: Vec3,
+    /// Last position an enemy was seen at; the bot pushes toward it.
+    pub last_seen_enemy: Option<Vec3>,
+    /// Seconds until the bot re-picks a roam waypoint.
+    pub roam_timer: f32,
+    /// Row in `MatchState::stats` (kills/deaths scoreboard).
+    pub stat_index: usize,
+}
+
+impl BotBrain {
+    pub fn new(team: Team, home: Vec3, stat_index: usize) -> Self {
+        Self {
+            team,
+            home,
+            last_seen_enemy: None,
+            roam_timer: 0.0,
+            stat_index,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct EnemyAI {
     pub waypoints: Vec<Vec3>,
@@ -18,6 +60,11 @@ pub struct EnemyAI {
     /// Seconds of "stagger" remaining: while > 0 the enemy holds still so a hit
     /// reads as a visible flinch instead of uninterrupted patrolling.
     pub stagger_timer: f32,
+    /// Cooldown until this enemy may fire at the player again.
+    pub fire_cooldown: f32,
+    /// Seconds of continuous line-of-sight required before the first shot;
+    /// gives the player a beat to react when spotted.
+    pub aim_warmup: f32,
 }
 
 impl EnemyAI {
@@ -32,6 +79,8 @@ impl EnemyAI {
             waypoint_threshold: 0.5,
             blocked_timer: 0.0,
             stagger_timer: 0.0,
+            fire_cooldown: 0.0,
+            aim_warmup: 0.0,
         }
     }
 
@@ -39,6 +88,9 @@ impl EnemyAI {
         if !self.is_alive || self.waypoints.is_empty() {
             return;
         }
+        // Both fields are pub; keep the index valid even if a route was
+        // shortened after the patrol already advanced past its new length.
+        self.current_waypoint %= self.waypoints.len();
 
         // While staggered from a recent hit, stand still and tick the timer down.
         if self.stagger_timer > 0.0 {

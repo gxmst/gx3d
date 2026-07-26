@@ -17,8 +17,9 @@ use crate::physics::{PhysicsBody, PhysicsMaterial, PhysicsShape, PhysicsWorld};
 use crate::renderer::{Light, RenderMesh};
 
 use super::{
-    EnemyDesc, EntityDesc, LightDesc, MaterialDesc, MeshSource, PhysicsDesc, PlayerDesc, Scene,
-    ShapeDesc, SurfaceDesc, SurfacePreset, TransformDesc,
+    EnemyDesc, EntityDesc, LightDesc, MatchDesc, MaterialDesc, MeshSource, PhysicsDesc, PlayerDesc,
+    Scene, ShapeDesc, StructureDesc, SurfaceDesc, SurfacePreset, TornadoDesc, TransformDesc,
+    WaterDesc,
 };
 
 /// The result of instantiating a [`Scene`]: name → handle maps so the caller
@@ -36,6 +37,11 @@ pub struct SpawnedScene {
     pub enemies: Vec<Entity>,
     /// Player spawn / tuning configuration from the scene.
     pub player: PlayerDesc,
+    /// Water surface instantiated from the scene's `water` block, to be
+    /// installed as a resource by the caller.
+    pub water: Option<crate::game::WaterSurface>,
+    /// Match state when the scene declares a `match_mode` block.
+    pub match_state: Option<crate::game::systems::match_mode::MatchState>,
 }
 
 impl SpawnedScene {
@@ -128,12 +134,35 @@ pub fn spawn_scene(
     // --- Lights -----------------------------------------------------------
     let lights = scene.lights.iter().map(build_light).collect();
 
-    // --- Enemies ----------------------------------------------------------
-    let enemies = scene
-        .enemies
+    // --- Enemies / match bots --------------------------------------------
+    // A match block supersedes plain patrol enemies.
+    let (enemies, match_state) = if let Some(desc) = &scene.match_mode {
+        (
+            Vec::new(),
+            spawn_match(desc, world, physics, &meshes, &materials),
+        )
+    } else {
+        (
+            scene
+                .enemies
+                .as_ref()
+                .map(|desc| spawn_enemies(desc, world, physics, &meshes, &materials))
+                .unwrap_or_default(),
+            None,
+        )
+    };
+
+    // --- Physics showcase effects ----------------------------------------
+    if let Some(desc) = &scene.tornado {
+        spawn_tornado(desc, world, assets, &materials);
+    }
+    let water = scene
+        .water
         .as_ref()
-        .map(|desc| spawn_enemies(desc, world, physics, &meshes, &materials))
-        .unwrap_or_default();
+        .and_then(|desc| spawn_water(desc, world, assets, &materials));
+    for desc in &scene.structures {
+        spawn_structure(desc, world, physics, &meshes, &materials);
+    }
 
     SpawnedScene {
         meshes,
@@ -141,7 +170,310 @@ pub fn spawn_scene(
         lights,
         enemies,
         player: sanitize_player(&scene.player),
+        water,
+        match_state,
     }
+}
+
+/// Spawn both bot teams and build the match state. The first team-A spawn is
+/// reserved for the player.
+fn spawn_match(
+    desc: &MatchDesc,
+    world: &mut EngineWorld,
+    physics: &mut PhysicsWorld,
+    meshes: &HashMap<String, Handle<Mesh>>,
+    materials: &HashMap<String, Handle<Material>>,
+) -> Option<crate::game::systems::match_mode::MatchState> {
+    use crate::game::systems::match_mode::StatEntry;
+    use crate::game::{BotBrain, EnemyAI, Team};
+    let Some(mesh) = meshes.get(&desc.mesh).copied() else {
+        log::warn!("Match references unknown mesh `{}`", desc.mesh);
+        return None;
+    };
+    let team_a_material = materials.get(&desc.team_a_material).copied();
+    let team_b_material = materials.get(&desc.team_b_material).copied();
+    let (Some(material_a), Some(material_b)) = (team_a_material, team_b_material) else {
+        log::warn!("Match team materials missing; match disabled");
+        return None;
+    };
+    if desc.team_a_spawns.is_empty() || desc.team_b_spawns.is_empty() {
+        log::warn!("Match requires spawns for both teams; match disabled");
+        return None;
+    }
+
+    let spawn_bot = |world: &mut EngineWorld,
+                     physics: &mut PhysicsWorld,
+                     team: Team,
+                     position: Vec3,
+                     material: Handle<Material>,
+                     stat_index: usize| {
+        let entity = world.spawn();
+        let mut transform = Transform::from_position(position);
+        transform.scale = Vec3::new(0.8, 0.8, 0.8);
+        world.add_component(entity, transform);
+        // Movement/health via EnemyAI (waypoints assigned dynamically by the
+        // match AI); combat memory via BotBrain.
+        world.add_component(entity, EnemyAI::new(Vec::new(), 2.6, 100.0));
+        world.add_component(entity, BotBrain::new(team, position, stat_index));
+        world.add_component(entity, RenderMesh { mesh, material });
+        let collider = PhysicsShape::Capsule {
+            radius: 0.4,
+            half_height: 0.8,
+        };
+        let (rb, col) = physics.add_kinematic_body(position, collider.to_rapier_collider());
+        world.add_component(entity, PhysicsBody::new(rb, col, false));
+        physics.register_entity(col, entity);
+    };
+
+    // Scoreboard rows: player first, then teammates, then opponents.
+    let mut stats = vec![StatEntry {
+        name: "你".to_string(),
+        team: Team::Alpha,
+        kills: 0,
+        deaths: 0,
+    }];
+    // Team A: skip the first spawn (player slot).
+    for (i, point) in desc.team_a_spawns.iter().skip(1).enumerate() {
+        let position = finite_vec3(*point, Vec3::ZERO, 100_000.0);
+        let stat_index = stats.len();
+        stats.push(StatEntry {
+            name: format!("队友 {}", i + 1),
+            team: Team::Alpha,
+            kills: 0,
+            deaths: 0,
+        });
+        spawn_bot(
+            world,
+            physics,
+            Team::Alpha,
+            position,
+            material_a,
+            stat_index,
+        );
+    }
+    for (i, point) in desc.team_b_spawns.iter().enumerate() {
+        let position = finite_vec3(*point, Vec3::ZERO, 100_000.0);
+        let stat_index = stats.len();
+        stats.push(StatEntry {
+            name: format!("敌方 {}", i + 1),
+            team: Team::Bravo,
+            kills: 0,
+            deaths: 0,
+        });
+        spawn_bot(
+            world,
+            physics,
+            Team::Bravo,
+            position,
+            material_b,
+            stat_index,
+        );
+    }
+
+    let waypoints = desc
+        .waypoints
+        .iter()
+        .copied()
+        .map(Vec3::from_array)
+        .filter(|p| p.is_finite())
+        .collect();
+    let player_spawn = finite_vec3(desc.team_a_spawns[0], Vec3::ZERO, 100_000.0);
+    let bomb_site = desc.bomb_site.map(|center| {
+        (
+            finite_vec3(center, Vec3::ZERO, 100_000.0),
+            desc.bomb_site_radius.clamp(1.5, 30.0),
+        )
+    });
+    Some(crate::game::systems::match_mode::MatchState::new(
+        waypoints,
+        player_spawn,
+        desc.rounds_to_win,
+        bomb_site,
+        stats,
+    ))
+}
+
+fn spawn_tornado(
+    desc: &TornadoDesc,
+    world: &mut EngineWorld,
+    assets: &mut AssetManager,
+    materials: &HashMap<String, Handle<Material>>,
+) {
+    let tornado = world.spawn();
+    world.add_component(
+        tornado,
+        crate::game::Tornado {
+            center: finite_vec3(desc.center, Vec3::ZERO, 100_000.0),
+            radius: finite_clamped(desc.radius, super::default_tornado_radius(), 2.0, 60.0),
+            height: finite_clamped(desc.height, super::default_tornado_height(), 4.0, 120.0),
+            strength: finite_clamped(
+                desc.strength,
+                super::default_tornado_strength(),
+                0.0,
+                3_000.0,
+            ),
+            wander: finite_clamped(desc.wander, super::default_tornado_wander(), 0.0, 30.0),
+            time: 0.0,
+        },
+    );
+
+    // Visual funnel: a few dozen swirling dust motes. They reuse the scene's
+    // `dust` material if declared, else a neutral gray.
+    let dust_material = materials.get("dust").copied().unwrap_or_else(|| {
+        assets.materials.insert(Material {
+            name: "Tornado Dust".to_string(),
+            albedo_factor: [0.45, 0.42, 0.38, 1.0],
+            metallic: 0.0,
+            roughness: 0.95,
+            emissive_factor: [0.0; 3],
+            albedo_map: None,
+            normal_map: None,
+            metallic_roughness_map: None,
+            emissive_map: None,
+            water: false,
+        })
+    });
+    let dust_mesh = assets
+        .meshes
+        .insert(ProceduralGenerator::create_sphere(8, 5));
+    for i in 0..48 {
+        let mote = world.spawn();
+        world.add_component(
+            mote,
+            crate::game::TornadoDust {
+                seed: (i as f32) / 48.0,
+            },
+        );
+        world.add_component(
+            mote,
+            Transform::new(
+                finite_vec3(desc.center, Vec3::ZERO, 100_000.0),
+                Quat::IDENTITY,
+                Vec3::splat(0.2),
+            ),
+        );
+        world.add_component(
+            mote,
+            RenderMesh {
+                mesh: dust_mesh,
+                material: dust_material,
+            },
+        );
+    }
+}
+
+fn spawn_water(
+    desc: &WaterDesc,
+    world: &mut EngineWorld,
+    assets: &mut AssetManager,
+    materials: &HashMap<String, Handle<Material>>,
+) -> Option<crate::game::WaterSurface> {
+    let Some(material) = materials.get(&desc.material).copied() else {
+        log::warn!("Water references unknown material `{}`", desc.material);
+        return None;
+    };
+    let size = finite_clamped(desc.size, super::default_water_size(), 4.0, 2_000.0);
+    let subdivisions = desc.subdivisions.clamp(8, 256);
+    let center = finite_vec3(desc.center, Vec3::ZERO, 100_000.0);
+    let amplitude = finite_clamped(desc.amplitude, super::default_water_amplitude(), 0.0, 4.0);
+
+    // The plane is generated around the origin; bake the world offset into
+    // the vertices so the wave functions can use world x/z directly.
+    let mut mesh = ProceduralGenerator::create_plane(size, subdivisions);
+    for vertex in &mut mesh.vertices {
+        vertex.position[0] += center.x;
+        vertex.position[1] += center.y;
+        vertex.position[2] += center.z;
+    }
+    let base_vertices = mesh.vertices.clone();
+    let mesh_handle = assets.meshes.insert(mesh);
+
+    let entity = world.spawn();
+    // Identity transform: vertices are already in world space.
+    world.add_component(entity, Transform::from_position(Vec3::ZERO));
+    world.add_component(
+        entity,
+        RenderMesh {
+            mesh: mesh_handle,
+            material,
+        },
+    );
+
+    Some(crate::game::WaterSurface {
+        mesh: mesh_handle,
+        center,
+        size,
+        amplitude,
+        time: 0.0,
+        base_vertices,
+    })
+}
+
+fn spawn_structure(
+    desc: &StructureDesc,
+    world: &mut EngineWorld,
+    physics: &mut PhysicsWorld,
+    meshes: &HashMap<String, Handle<Mesh>>,
+    materials: &HashMap<String, Handle<Material>>,
+) {
+    let Some(mesh) = meshes.get(&desc.mesh).copied() else {
+        log::warn!("Structure references unknown mesh `{}`", desc.mesh);
+        return;
+    };
+    let Some(material) = materials.get(&desc.material).copied() else {
+        log::warn!("Structure references unknown material `{}`", desc.material);
+        return;
+    };
+    let half = Vec3::from_array(desc.block_half_extents).clamp(Vec3::splat(0.05), Vec3::splat(5.0));
+    let base = finite_vec3(desc.position, Vec3::ZERO, 100_000.0);
+    let [nx, ny, nz] = desc.blocks.map(|n| n.clamp(1, 24));
+    let mass = finite_clamped(
+        desc.block_mass,
+        super::default_structure_block_mass(),
+        1.0,
+        500.0,
+    );
+
+    let mut spawned = 0usize;
+    for iy in 0..ny {
+        for ix in 0..nx {
+            for iz in 0..nz {
+                // Hollow structures only keep perimeter columns (walls).
+                if desc.hollow && ix != 0 && ix != nx - 1 && iz != 0 && iz != nz - 1 {
+                    continue;
+                }
+                let position = base
+                    + Vec3::new(
+                        (ix as f32 - (nx as f32 - 1.0) * 0.5) * half.x * 2.0,
+                        half.y + iy as f32 * half.y * 2.0,
+                        (iz as f32 - (nz as f32 - 1.0) * 0.5) * half.z * 2.0,
+                    );
+                let collider = PhysicsShape::Cuboid { half_extents: half }
+                    .to_rapier_collider_with_material(PhysicsMaterial {
+                        friction: 0.85,
+                        restitution: 0.02,
+                    });
+                let (rb, col) = physics.add_dynamic_body(position, collider, mass);
+                // Spawn frozen: the block behaves as level geometry until an
+                // impact or lost support wakes it (structure_support system).
+                physics.freeze_body(rb);
+
+                let entity = world.spawn();
+                world.add_component(entity, Transform::new(position, Quat::IDENTITY, half * 2.0));
+                world.add_component(entity, RenderMesh { mesh, material });
+                world.add_component(entity, PhysicsBody::new(rb, col, false));
+                world.add_component(
+                    entity,
+                    crate::game::DestructibleBlock {
+                        half_height: half.y,
+                    },
+                );
+                physics.register_entity(col, entity);
+                spawned += 1;
+            }
+        }
+    }
+    log::info!("Spawned destructible structure with {spawned} blocks");
 }
 
 fn finite_clamped(value: f32, fallback: f32, minimum: f32, maximum: f32) -> f32 {
@@ -162,11 +494,22 @@ fn finite_vec3(values: [f32; 3], fallback: Vec3, limit: f32) -> Vec3 {
 }
 
 fn sanitize_player(desc: &PlayerDesc) -> PlayerDesc {
+    // Fallbacks reuse the serde defaults so the two never drift apart.
     PlayerDesc {
-        position: finite_vec3(desc.position, Vec3::new(0.0, 2.0, 5.0), 100_000.0).to_array(),
-        height: finite_clamped(desc.height, 1.6, 0.8, 3.0),
-        move_speed: finite_clamped(desc.move_speed, 8.0, 0.5, 30.0),
-        mouse_sensitivity: finite_clamped(desc.mouse_sensitivity, 0.002, 0.0001, 0.02),
+        position: finite_vec3(
+            desc.position,
+            Vec3::from_array(super::default_player_position()),
+            100_000.0,
+        )
+        .to_array(),
+        height: finite_clamped(desc.height, super::default_player_height(), 0.8, 3.0),
+        move_speed: finite_clamped(desc.move_speed, super::default_move_speed(), 0.5, 30.0),
+        mouse_sensitivity: finite_clamped(
+            desc.mouse_sensitivity,
+            super::default_mouse_sensitivity(),
+            0.0001,
+            0.02,
+        ),
     }
 }
 
@@ -205,6 +548,7 @@ fn build_material(desc: &MaterialDesc) -> Material {
         normal_map: None,
         metallic_roughness_map: None,
         emissive_map: None,
+        water: desc.water,
     }
 }
 
@@ -411,8 +755,8 @@ fn spawn_entity(
         world.add_component(
             entity,
             Explosive {
-                radius: finite_clamped(*radius, 5.0, 1.0, 20.0),
-                impulse: finite_clamped(*impulse, 18.0, 1.0, 80.0),
+                radius: finite_clamped(*radius, super::default_explosion_radius(), 1.0, 20.0),
+                impulse: finite_clamped(*impulse, super::default_explosion_impulse(), 1.0, 80.0),
             },
         );
     }
@@ -534,6 +878,7 @@ mod tests {
             roughness: f32::INFINITY,
             metallic: -4.0,
             emissive: [f32::NAN, -1.0, 999.0],
+            water: false,
         });
         assert!(material.albedo_factor.iter().all(|value| value.is_finite()));
         assert!((0.0..=1.0).contains(&material.metallic));

@@ -3,7 +3,6 @@ use crate::game::Player;
 use crate::physics::PhysicsWorld;
 use crate::renderer::Camera;
 use glam::Vec3;
-use rapier3d::control::{CharacterAutostep, CharacterLength, KinematicCharacterController};
 use winit::event::MouseButton;
 use winit::keyboard::KeyCode;
 
@@ -11,9 +10,7 @@ use super::PlayerBody;
 
 const PLAYER_EFFECTIVE_MASS: f32 = 75.0;
 const MAX_STEP_HEIGHT: f32 = 0.36;
-const MIN_STEP_WIDTH: f32 = 0.18;
 const GROUND_SNAP_DISTANCE: f32 = 0.24;
-const CHARACTER_OFFSET: f32 = 0.02;
 
 pub fn input_system(_world: &mut EngineWorld, resources: &Resources) {
     if resources
@@ -23,11 +20,7 @@ pub fn input_system(_world: &mut EngineWorld, resources: &Resources) {
     {
         return;
     }
-    if resources
-        .get::<super::MenuState>()
-        .map(|menu| menu.0.open)
-        .unwrap_or(false)
-    {
+    if super::menu_open(resources) {
         if let Some(mut player) = resources.get_mut::<Player>() {
             player.stop_movement();
         }
@@ -93,7 +86,7 @@ pub fn input_system(_world: &mut EngineWorld, resources: &Resources) {
     }
 
     {
-        let mut player = resources.remove::<Player>().expect("Player missing");
+        let mut player = resources.expect_mut::<Player>();
         {
             let mut camera = resources.expect_mut::<Camera>();
             player.camera_controller.update_camera_rotation(
@@ -109,7 +102,6 @@ pub fn input_system(_world: &mut EngineWorld, resources: &Resources) {
         if wants_jump {
             player.queue_jump();
         }
-        resources.insert(player);
     }
 }
 
@@ -126,12 +118,10 @@ pub fn fixed_update_system(_world: &mut EngineWorld, resources: &Resources) {
     }
 
     let player_body = resources.expect::<PlayerBody>().0;
-    let mut player = resources.remove::<Player>().expect("Player missing");
+    let mut player = resources.expect_mut::<Player>();
     {
         let mut physics = resources.expect_mut::<PhysicsWorld>();
         let Some(position) = physics.get_body_position(player_body) else {
-            drop(physics);
-            resources.insert(player);
             return;
         };
 
@@ -140,47 +130,36 @@ pub fn fixed_update_system(_world: &mut EngineWorld, resources: &Resources) {
             if physics.teleport_body(player_body, recovery_position) {
                 player.reset_motion();
             }
-            drop(physics);
-            resources.insert(player);
             return;
         }
 
         let dt = physics.integration_parameters.dt;
         let desired_translation = player.desired_translation(dt, physics.gravity.y);
-        let controller = KinematicCharacterController {
-            offset: CharacterLength::Absolute(CHARACTER_OFFSET),
-            slide: true,
-            autostep: Some(CharacterAutostep {
-                max_height: CharacterLength::Absolute(MAX_STEP_HEIGHT),
-                min_width: CharacterLength::Absolute(MIN_STEP_WIDTH),
-                // Small props should be pushed instead of treated like stairs.
-                include_dynamic_bodies: false,
-            }),
-            max_slope_climb_angle: 48.0_f32.to_radians(),
-            min_slope_slide_angle: 54.0_f32.to_radians(),
-            snap_to_ground: if player.is_rising() {
+        let controller = crate::physics::character_controller(
+            MAX_STEP_HEIGHT,
+            if player.is_rising() {
                 None
             } else {
-                Some(CharacterLength::Absolute(GROUND_SNAP_DISTANCE))
+                Some(GROUND_SNAP_DISTANCE)
             },
-            normal_nudge_factor: 1.0e-3,
-            ..Default::default()
-        };
+        );
 
-        if let Some(movement) = physics.move_kinematic_character(
+        match physics.move_kinematic_character(
             player_body,
             desired_translation,
             &controller,
             PLAYER_EFFECTIVE_MASS,
         ) {
-            player.finish_character_move(
+            Some(movement) => player.finish_character_move(
                 movement.grounded,
                 movement.hit_ceiling,
                 position + movement.translation,
-            );
+            ),
+            // Even when no movement was resolved this tick, grounded/coyote
+            // state and the fall-recovery checkpoint must keep advancing.
+            None => player.finish_character_move(false, false, position),
         }
     }
-    resources.insert(player);
 }
 
 pub fn sync_system(_world: &mut EngineWorld, resources: &Resources) {

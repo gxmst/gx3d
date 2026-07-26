@@ -1,8 +1,7 @@
 use crate::input::InputState;
 use crate::kinematics::RecoilSystem;
 use crate::renderer::Camera;
-use glam::{Quat, Vec2, Vec3};
-use winit::keyboard::KeyCode;
+use glam::{Quat, Vec2};
 
 #[derive(Debug, Clone)]
 pub struct CameraController {
@@ -49,41 +48,6 @@ impl CameraController {
         let yaw_rotation = Quat::from_rotation_y(self.yaw);
         let pitch_rotation = Quat::from_rotation_x(self.pitch + recoil_offset.y);
         camera.rotation = yaw_rotation * pitch_rotation;
-    }
-
-    pub fn update(&mut self, camera: &mut Camera, input: &InputState, dt: f32) {
-        // Update camera rotation
-        self.update_camera_rotation(camera, input, dt);
-
-        // Movement
-        let mut movement = Vec3::ZERO;
-        let forward = camera.forward();
-        let right = camera.right();
-
-        if input.is_key_pressed(KeyCode::KeyW) {
-            movement += forward;
-        }
-        if input.is_key_pressed(KeyCode::KeyS) {
-            movement -= forward;
-        }
-        if input.is_key_pressed(KeyCode::KeyD) {
-            movement += right;
-        }
-        if input.is_key_pressed(KeyCode::KeyA) {
-            movement -= right;
-        }
-
-        let speed = if input.is_key_pressed(KeyCode::ShiftLeft) {
-            self.move_speed * self.sprint_multiplier
-        } else {
-            self.move_speed
-        };
-
-        if movement.length_squared() > 0.0 {
-            movement = movement.normalize() * speed * dt;
-        }
-
-        camera.position += movement;
     }
 
     pub fn apply_recoil(&mut self, impulse: Vec2) {

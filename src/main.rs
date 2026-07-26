@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use winit::{
@@ -10,19 +11,56 @@ use winit::{
 
 const DEFAULT_WINDOW_SIZE: PhysicalSize<u32> = PhysicalSize::new(1920, 1080);
 const MAX_FRAME_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / 144);
+const USAGE: &str = "用法: gxengine [--scene <名字或路径>]\n  \
+    名字会解析成 assets/scenes/<名字>.json，例如 --scene sandbox";
 
 struct Runner {
     app: Option<gxengine::core::App>,
     next_frame: Instant,
+    scene_path: Option<PathBuf>,
 }
 
 impl Runner {
-    fn new() -> Self {
+    fn new(scene_path: Option<PathBuf>) -> Self {
         Self {
             app: None,
             next_frame: Instant::now(),
+            scene_path,
         }
     }
+}
+
+/// Parse and validate CLI arguments up front so typos fail fast with a clear
+/// message instead of being silently ignored during startup.
+fn parse_scene_arg() -> Result<Option<PathBuf>, String> {
+    let mut scene = None;
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        let value = if arg == "--scene" {
+            args.next()
+                .ok_or_else(|| "--scene 需要一个场景名字或路径".to_string())?
+        } else if let Some(value) = arg.strip_prefix("--scene=") {
+            value.to_string()
+        } else {
+            return Err(format!("未知参数: {arg}"));
+        };
+        if value.is_empty() || value.starts_with('-') {
+            return Err(format!("--scene 的值不合法: {value:?}"));
+        }
+        let path = PathBuf::from(&value);
+        let path = if path.extension().is_some() || path.components().count() > 1 {
+            path
+        } else {
+            std::path::Path::new("assets/scenes")
+                .join(value)
+                .with_extension("json")
+        };
+        if !path.is_file() {
+            return Err(format!("场景文件不存在: {}", path.display()));
+        }
+        scene = Some(path);
+    }
+    Ok(scene)
 }
 
 impl ApplicationHandler for Runner {
@@ -45,7 +83,7 @@ impl ApplicationHandler for Runner {
         };
         center_window(&window, DEFAULT_WINDOW_SIZE);
         let window = Arc::new(window);
-        match pollster::block_on(gxengine::core::App::new(window)) {
+        match pollster::block_on(gxengine::core::App::new(window, self.scene_path.take())) {
             Ok(app) => self.app = Some(app),
             Err(error) => {
                 log::error!("Failed to initialize the engine: {error}");
@@ -86,20 +124,39 @@ impl ApplicationHandler for Runner {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let Some(app) = &mut self.app else { return };
         let now = Instant::now();
+        // Let winit wait for the deadline instead of sleeping on the event
+        // loop thread: input events keep flowing during the wait and the cap
+        // isn't quantized by the OS sleep granularity (~15.6 ms on Windows).
         if now < self.next_frame {
-            std::thread::sleep(self.next_frame - now);
+            event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_frame));
+            return;
         }
-        self.next_frame = Instant::now() + MAX_FRAME_INTERVAL;
+        self.next_frame = now + MAX_FRAME_INTERVAL;
         app.update();
         app.render();
+        if app.quit_requested() {
+            event_loop.exit();
+            return;
+        }
+        event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_frame));
     }
 }
 
 fn main() {
-    env_logger::init();
+    // Engine logs (scene fallbacks, missing assets, surface trouble) should be
+    // visible by default; RUST_LOG still overrides.
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("gxengine=info"))
+        .init();
+    let scene_path = match parse_scene_arg() {
+        Ok(scene_path) => scene_path,
+        Err(message) => {
+            eprintln!("{message}\n{USAGE}");
+            std::process::exit(2);
+        }
+    };
     let event_loop = match EventLoop::new() {
         Ok(event_loop) => event_loop,
         Err(error) => {
@@ -109,7 +166,7 @@ fn main() {
         }
     };
     event_loop.set_control_flow(ControlFlow::Poll);
-    let mut runner = Runner::new();
+    let mut runner = Runner::new(scene_path);
     if let Err(error) = event_loop.run_app(&mut runner) {
         log::error!("Event loop exited with an error: {error}");
     }

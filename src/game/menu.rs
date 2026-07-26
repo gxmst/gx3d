@@ -40,12 +40,25 @@ pub const RESOLUTION_OPTIONS: [ResolutionOption; 5] = [
     },
 ];
 
+/// Startup default for god mode. The menu checkbox (`PauseMenu`) and the
+/// V-key handler (`ViewModeState`) both read this so they can never disagree
+/// before the first toggle.
+pub const DEFAULT_GOD_MODE_ENABLED: bool = true;
+
 #[derive(Debug, Clone)]
 pub struct PauseMenu {
     pub open: bool,
     pub language: Language,
     pub selected_resolution: usize,
     pub god_mode_enabled: bool,
+    /// Index into `core::config::SENSITIVITY_OPTIONS`.
+    pub sensitivity_index: usize,
+    /// Selected weather mode shown on the weather button.
+    pub weather: crate::game::systems::weather::WeatherKind,
+    /// Scene names shown by the scene selector (from `SceneLibrary`).
+    pub scene_names: Vec<String>,
+    /// Which entry corresponds to the loaded scene (highlighted).
+    pub current_scene: Option<usize>,
 }
 
 impl PauseMenu {
@@ -54,22 +67,46 @@ impl PauseMenu {
             open: false,
             language: Language::SimplifiedChinese,
             selected_resolution: 2,
-            god_mode_enabled: true,
+            god_mode_enabled: DEFAULT_GOD_MODE_ENABLED,
+            sensitivity_index: crate::core::config::DEFAULT_SENSITIVITY_INDEX,
+            weather: Default::default(),
+            scene_names: Vec::new(),
+            current_scene: None,
         }
     }
 
     pub fn hit_test(&self, width: f32, height: f32, cursor: Vec2) -> Option<MenuAction> {
-        let layout = PauseMenuLayout::new(width, height);
+        let layout = PauseMenuLayout::new_with_scenes(width, height, self.scene_names.len());
         for button in layout.resolution_buttons {
             if button.rect.contains(cursor) {
                 return Some(MenuAction::SetResolution(button.index));
             }
+        }
+        for button in layout.scene_buttons {
+            if button.rect.contains(cursor) {
+                return Some(MenuAction::LoadScene(button.index));
+            }
+        }
+        if layout.sensitivity_button.contains(cursor) {
+            return Some(MenuAction::CycleSensitivity);
+        }
+        if layout.weather_button.contains(cursor) {
+            return Some(MenuAction::CycleWeather);
         }
         if layout.language_button.contains(cursor) {
             return Some(MenuAction::SetLanguage(Language::SimplifiedChinese));
         }
         if layout.god_mode_button.contains(cursor) {
             return Some(MenuAction::ToggleGodMode);
+        }
+        if layout.resume_button.contains(cursor) {
+            return Some(MenuAction::Resume);
+        }
+        if layout.reset_button.contains(cursor) {
+            return Some(MenuAction::ResetScene);
+        }
+        if layout.quit_button.contains(cursor) {
+            return Some(MenuAction::Quit);
         }
         None
     }
@@ -86,6 +123,13 @@ pub enum MenuAction {
     SetResolution(usize),
     SetLanguage(Language),
     ToggleGodMode,
+    CycleSensitivity,
+    CycleWeather,
+    /// Load the scene at this index of `PauseMenu::scene_names`.
+    LoadScene(usize),
+    Resume,
+    ResetScene,
+    Quit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -112,20 +156,16 @@ impl UiRect {
     pub fn bottom(&self) -> f32 {
         self.y + self.h
     }
-
-    pub fn inset(&self, amount: f32) -> Self {
-        let amount = amount.max(0.0).min(self.w.min(self.h) * 0.5);
-        Self {
-            x: self.x + amount,
-            y: self.y + amount,
-            w: (self.w - amount * 2.0).max(0.0),
-            h: (self.h - amount * 2.0).max(0.0),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct ResolutionButton {
+    pub rect: UiRect,
+    pub index: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SceneButton {
     pub rect: UiRect,
     pub index: usize,
 }
@@ -145,6 +185,12 @@ pub struct PauseMenuLayout {
     pub resolution_buttons: Vec<ResolutionButton>,
     pub language_button: UiRect,
     pub god_mode_button: UiRect,
+    pub sensitivity_button: UiRect,
+    pub weather_button: UiRect,
+    pub scene_buttons: Vec<SceneButton>,
+    pub resume_button: UiRect,
+    pub reset_button: UiRect,
+    pub quit_button: UiRect,
     pub status_card: UiRect,
     pub movement_card: UiRect,
     pub interaction_card: UiRect,
@@ -155,6 +201,10 @@ pub struct PauseMenuLayout {
 
 impl PauseMenuLayout {
     pub fn new(width: f32, height: f32) -> Self {
+        Self::new_with_scenes(width, height, 0)
+    }
+
+    pub fn new_with_scenes(width: f32, height: f32, scene_count: usize) -> Self {
         let width = finite_dimension(width);
         let height = finite_dimension(height);
         let scale = (height / 1080.0).min(width / 1600.0).clamp(0.68, 1.22);
@@ -246,7 +296,19 @@ impl PauseMenuLayout {
             w: full_button_w,
             h: button_h,
         };
-        let status_y = god_mode_button.bottom() + (22.0 * scale).clamp(15.0, 27.0);
+        let sensitivity_button = UiRect {
+            x: panel.x + content_pad,
+            y: god_mode_button.bottom() + (52.0 * scale).clamp(35.0, 64.0),
+            w: full_button_w,
+            h: button_h,
+        };
+        let weather_button = UiRect {
+            x: panel.x + content_pad,
+            y: sensitivity_button.bottom() + (52.0 * scale).clamp(35.0, 64.0),
+            w: full_button_w,
+            h: button_h,
+        };
+        let status_y = weather_button.bottom() + (22.0 * scale).clamp(15.0, 27.0);
         let desired_status_h = (96.0 * scale).clamp(64.0, 116.0);
         let status_card = UiRect {
             x: panel.x + content_pad,
@@ -257,8 +319,53 @@ impl PauseMenuLayout {
 
         let key_content_x = key_panel.x + content_pad;
         let key_content_w = (key_panel.w - content_pad * 2.0).max(1.0);
-        let key_start_y = key_panel.y + (72.0 * scale).clamp(48.0, 88.0);
+        let key_top_y = key_panel.y + (72.0 * scale).clamp(48.0, 88.0);
         let card_gap = (12.0 * scale).clamp(8.0, 15.0);
+
+        // Scene selector: one row of equal-width buttons at the top of the
+        // key panel; session controls (resume/reset/quit) right below.
+        let scene_h = if scene_count > 0 { button_h } else { 0.0 };
+        let mut scene_buttons = Vec::with_capacity(scene_count);
+        if scene_count > 0 {
+            let gap = (10.0 * scale).clamp(6.0, 13.0);
+            let per_w = ((key_content_w - gap * (scene_count.saturating_sub(1) as f32))
+                / scene_count as f32)
+                .max(40.0);
+            for index in 0..scene_count {
+                scene_buttons.push(SceneButton {
+                    rect: UiRect {
+                        x: key_content_x + index as f32 * (per_w + gap),
+                        y: key_top_y,
+                        w: per_w,
+                        h: scene_h,
+                    },
+                    index,
+                });
+            }
+        }
+        let session_y = key_top_y + scene_h + if scene_count > 0 { card_gap } else { 0.0 };
+        let session_gap = (10.0 * scale).clamp(6.0, 13.0);
+        let session_w = ((key_content_w - session_gap * 2.0) / 3.0).max(40.0);
+        let resume_button = UiRect {
+            x: key_content_x,
+            y: session_y,
+            w: session_w,
+            h: button_h,
+        };
+        let reset_button = UiRect {
+            x: key_content_x + session_w + session_gap,
+            y: session_y,
+            w: session_w,
+            h: button_h,
+        };
+        let quit_button = UiRect {
+            x: key_content_x + (session_w + session_gap) * 2.0,
+            y: session_y,
+            w: session_w,
+            h: button_h,
+        };
+
+        let key_start_y = session_y + button_h + card_gap;
         let cards_bottom = key_panel.bottom() - content_pad;
         let cards_h = (cards_bottom - key_start_y - card_gap * 2.0).max(3.0);
         let movement_h = cards_h * 0.28;
@@ -291,6 +398,12 @@ impl PauseMenuLayout {
             resolution_buttons,
             language_button,
             god_mode_button,
+            sensitivity_button,
+            weather_button,
+            scene_buttons,
+            resume_button,
+            reset_button,
+            quit_button,
             status_card,
             movement_card,
             interaction_card,

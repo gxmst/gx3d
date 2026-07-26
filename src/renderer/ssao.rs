@@ -5,6 +5,13 @@ use wgpu::util::DeviceExt;
 const SSAO_KERNEL_SIZE: usize = 64;
 const SSAO_NOISE_SIZE: usize = 4;
 
+// Single source of truth for the SSAO look; used at creation and per-frame.
+// A slightly wider radius and a strength above 1 give corners and contact
+// points more presence; the post-process AO mix does the final softening.
+const SSAO_RADIUS: f32 = 0.65;
+const SSAO_BIAS: f32 = 0.025;
+const SSAO_STRENGTH: f32 = 1.4;
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 pub struct SsaoParams {
@@ -41,6 +48,7 @@ pub struct SsaoPass {
     pub noise_texture: wgpu::Texture,
     pub noise_view: wgpu::TextureView,
     pub noise_sampler: wgpu::Sampler,
+    pub depth_sampler: wgpu::Sampler,
     pub ssao_texture: wgpu::Texture,
     pub ssao_view: wgpu::TextureView,
     pub ssao_sampler: wgpu::Sampler,
@@ -50,18 +58,27 @@ pub struct SsaoPass {
     pub blur_pipeline: wgpu::RenderPipeline,
     pub bind_group_layout: wgpu::BindGroupLayout,
     pub blur_bind_group_layout: wgpu::BindGroupLayout,
+    // Rebuilt only on resize; creating these every frame is pure waste.
+    bind_group: wgpu::BindGroup,
+    blur_bind_group: wgpu::BindGroup,
 }
 
 impl SsaoPass {
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: u32) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        depth_view: &wgpu::TextureView,
+    ) -> Self {
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("SSAO Params Buffer"),
             contents: bytemuck::cast_slice(&[SsaoParams::new(
                 Mat4::IDENTITY,
                 Vec2::new(width as f32, height as f32),
-                0.5,
-                0.025,
-                1.0,
+                SSAO_RADIUS,
+                SSAO_BIAS,
+                SSAO_STRENGTH,
             )]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
@@ -105,25 +122,7 @@ impl SsaoPass {
             ..Default::default()
         });
 
-        let create_r8_texture = |label| {
-            device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(label),
-                size: wgpu::Extent3d {
-                    width: ssao_width,
-                    height: ssao_height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::R8Unorm,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            })
-        };
-
-        let ssao_texture = create_r8_texture("SSAO Texture");
+        let ssao_texture = create_r8_target(device, "SSAO Texture", ssao_width, ssao_height);
         let ssao_view = ssao_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let ssao_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("SSAO Sampler"),
@@ -134,8 +133,17 @@ impl SsaoPass {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             ..Default::default()
         });
+        let depth_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("SSAO Depth Sampler"),
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            ..Default::default()
+        });
 
-        let blur_texture = create_r8_texture("SSAO Blur Texture");
+        let blur_texture = create_r8_target(device, "SSAO Blur Texture", ssao_width, ssao_height);
         let blur_view = blur_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -249,62 +257,33 @@ impl SsaoPass {
             ),
         });
 
-        let create_fullscreen_pipeline =
-            |label: &str,
-             layout: &wgpu::PipelineLayout,
-             shader: &wgpu::ShaderModule,
-             target_format: wgpu::TextureFormat| {
-                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: Some(label),
-                    layout: Some(layout),
-                    vertex: wgpu::VertexState {
-                        module: shader,
-                        entry_point: Some("vs_main"),
-                        compilation_options: wgpu::PipelineCompilationOptions::default(),
-                        buffers: &[],
-                    },
-                    fragment: Some(wgpu::FragmentState {
-                        module: shader,
-                        entry_point: Some("fs_main"),
-                        compilation_options: wgpu::PipelineCompilationOptions::default(),
-                        targets: &[Some(wgpu::ColorTargetState {
-                            format: target_format,
-                            blend: Some(wgpu::BlendState::REPLACE),
-                            write_mask: wgpu::ColorWrites::ALL,
-                        })],
-                    }),
-                    primitive: wgpu::PrimitiveState {
-                        topology: wgpu::PrimitiveTopology::TriangleList,
-                        strip_index_format: None,
-                        front_face: wgpu::FrontFace::Ccw,
-                        cull_mode: None,
-                        polygon_mode: wgpu::PolygonMode::Fill,
-                        unclipped_depth: false,
-                        conservative: false,
-                    },
-                    depth_stencil: None,
-                    multisample: wgpu::MultisampleState {
-                        count: 1,
-                        mask: !0,
-                        alpha_to_coverage_enabled: false,
-                    },
-                    multiview_mask: None,
-                    cache: None,
-                })
-            };
-
-        let pipeline = create_fullscreen_pipeline(
+        let pipeline = super::pipeline::create_fullscreen_pipeline(
+            device,
             "SSAO Pipeline",
             &pipeline_layout,
             &shader,
             wgpu::TextureFormat::R8Unorm,
         );
-        let blur_pipeline = create_fullscreen_pipeline(
+        let blur_pipeline = super::pipeline::create_fullscreen_pipeline(
+            device,
             "SSAO Blur Pipeline",
             &blur_pipeline_layout,
             &blur_shader,
             wgpu::TextureFormat::R8Unorm,
         );
+
+        let bind_group = build_main_bind_group(
+            device,
+            &bind_group_layout,
+            &params_buffer,
+            &kernel_buffer,
+            depth_view,
+            &depth_sampler,
+            &noise_view,
+            &noise_sampler,
+        );
+        let blur_bind_group =
+            build_blur_bind_group(device, &blur_bind_group_layout, &ssao_view, &ssao_sampler);
 
         Self {
             params_buffer,
@@ -312,6 +291,7 @@ impl SsaoPass {
             noise_texture,
             noise_view,
             noise_sampler,
+            depth_sampler,
             ssao_texture,
             ssao_view,
             ssao_sampler,
@@ -321,94 +301,62 @@ impl SsaoPass {
             blur_pipeline,
             bind_group_layout,
             blur_bind_group_layout,
+            bind_group,
+            blur_bind_group,
         }
     }
 
     pub fn update_params(&self, queue: &wgpu::Queue, projection: Mat4, screen_size: Vec2) {
-        let params = SsaoParams::new(projection, screen_size, 0.5, 0.025, 1.0);
+        let params = SsaoParams::new(
+            projection,
+            screen_size,
+            SSAO_RADIUS,
+            SSAO_BIAS,
+            SSAO_STRENGTH,
+        );
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
     }
 
-    pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+    pub fn resize(
+        &mut self,
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        depth_view: &wgpu::TextureView,
+    ) {
         let ssao_width = width.max(1);
         let ssao_height = height.max(1);
 
-        let create_r8_texture = |label| {
-            device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(label),
-                size: wgpu::Extent3d {
-                    width: ssao_width,
-                    height: ssao_height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::R8Unorm,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            })
-        };
-
-        self.ssao_texture = create_r8_texture("SSAO Texture");
+        self.ssao_texture = create_r8_target(device, "SSAO Texture", ssao_width, ssao_height);
         self.ssao_view = self
             .ssao_texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        self.blur_texture = create_r8_texture("SSAO Blur Texture");
+        self.blur_texture = create_r8_target(device, "SSAO Blur Texture", ssao_width, ssao_height);
         self.blur_view = self
             .blur_texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+
+        // The depth target and SSAO targets were recreated, so both cached
+        // bind groups point at stale views and must be rebuilt.
+        self.bind_group = build_main_bind_group(
+            device,
+            &self.bind_group_layout,
+            &self.params_buffer,
+            &self.kernel_buffer,
+            depth_view,
+            &self.depth_sampler,
+            &self.noise_view,
+            &self.noise_sampler,
+        );
+        self.blur_bind_group = build_blur_bind_group(
+            device,
+            &self.blur_bind_group_layout,
+            &self.ssao_view,
+            &self.ssao_sampler,
+        );
     }
 
-    pub fn render(
-        &self,
-        device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
-        depth_view: &wgpu::TextureView,
-    ) -> &wgpu::TextureView {
-        // SSAO generation pass.
-        let depth_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("SSAO Depth Sampler"),
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            ..Default::default()
-        });
-
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("SSAO Bind Group"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.params_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: self.kernel_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(depth_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::Sampler(&depth_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::TextureView(&self.noise_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: wgpu::BindingResource::Sampler(&self.noise_sampler),
-                },
-            ],
-        });
-
+    pub fn render(&self, encoder: &mut wgpu::CommandEncoder) -> &wgpu::TextureView {
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("SSAO Pass"),
@@ -427,26 +375,11 @@ impl SsaoPass {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
+            pass.set_bind_group(0, &self.bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
 
         // Simple 4-tap box blur to reduce noise.
-        let blur_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("SSAO Blur Bind Group"),
-            layout: &self.blur_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&self.ssao_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.ssao_sampler),
-                },
-            ],
-        });
-
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("SSAO Blur Pass"),
@@ -465,12 +398,94 @@ impl SsaoPass {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.blur_pipeline);
-            pass.set_bind_group(0, &blur_bind_group, &[]);
+            pass.set_bind_group(0, &self.blur_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
 
         &self.blur_view
     }
+}
+
+fn create_r8_target(device: &wgpu::Device, label: &str, width: u32, height: u32) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::R8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_main_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    params_buffer: &wgpu::Buffer,
+    kernel_buffer: &wgpu::Buffer,
+    depth_view: &wgpu::TextureView,
+    depth_sampler: &wgpu::Sampler,
+    noise_view: &wgpu::TextureView,
+    noise_sampler: &wgpu::Sampler,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("SSAO Bind Group"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: params_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: kernel_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(depth_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::Sampler(depth_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(noise_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::Sampler(noise_sampler),
+            },
+        ],
+    })
+}
+
+fn build_blur_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    ssao_view: &wgpu::TextureView,
+    ssao_sampler: &wgpu::Sampler,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("SSAO Blur Bind Group"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(ssao_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(ssao_sampler),
+            },
+        ],
+    })
 }
 
 fn generate_kernel_and_noise() -> (
@@ -545,7 +560,16 @@ fn hash_f(seed: u32, offset: u32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::generate_kernel_and_noise;
+    use super::{generate_kernel_and_noise, SSAO_KERNEL_SIZE};
+
+    #[test]
+    fn ssao_shader_kernel_size_matches_the_rust_side() {
+        let source = include_str!("../../assets/shaders/ssao.wgsl");
+        assert!(
+            source.contains(&format!("const KERNEL_SIZE: u32 = {SSAO_KERNEL_SIZE}u;")),
+            "ssao.wgsl KERNEL_SIZE diverged from SSAO_KERNEL_SIZE"
+        );
+    }
 
     #[test]
     fn ssao_kernel_uses_the_tbn_normal_axis() {
