@@ -49,7 +49,9 @@ impl<T> AssetStore<T> {
     pub fn new() -> Self {
         Self {
             assets: HashMap::new(),
-            next_id: 0,
+            // Ids start at 1 so `Handle::default()` (id 0) never silently
+            // aliases the first real asset — lookups on unset handles miss.
+            next_id: 1,
         }
     }
 
@@ -121,6 +123,7 @@ impl AssetManager {
             normal_map: None,
             metallic_roughness_map: None,
             emissive_map: None,
+            water: false,
         };
         self.materials.insert(material)
     }

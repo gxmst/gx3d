@@ -1,878 +1,273 @@
 # GxEngine 设计文档
 
-## 1. 项目概述
-
-### 1.1 项目定位
-
-GxEngine 是一个轻量级、模块化的 3D 游戏引擎，专注于 FPS 游戏开发。采用 Rust 语言编写，基于 ECS 架构，提供现代化的渲染管线和物理模拟能力。
-
-### 1.2 设计目标
-
-- **模块化架构**：各子系统独立，可按需组合
-- **高性能**：充分利用 Rust 的零成本抽象和并发能力
-- **易于扩展**：清晰的接口设计，方便添加新功能
-- **学习友好**：代码结构清晰，适合理解引擎原理
-
-### 1.3 技术栈
-
-| 组件 | 技术选型 | 说明 |
-|------|----------|------|
-| 核心语言 | Rust 2021 (1.95+) | 内存安全、高性能 |
-| 图形 API | wgpu 29.0 | 跨平台现代图形抽象层 |
-| 物理引擎 | rapier3d 0.32 | Rust 原生物理引擎 |
-| ECS 框架 | hecs 0.11 | 成熟轻量级 ECS 库，保障高性能与借用安全 |
-| 资产格式 | glTF 2.0 / GLB | 统一规范的 3D 运行时资产交换标准 |
-| 窗口管理 | winit 0.30 | 跨平台窗口与输入事件管理 |
+> 本文件是 GxEngine 项目的权威**方向与哲学**文档，既写给作者本人，也写给未来接手本项目的 AI。
+> 它描述"这个项目要成为什么、为什么、按什么顺序长"。
+> **具体实现进度以仓库根目录的 `README.md` 和测试为准**——本文件负责方向，README 负责现状。
+> 阅读顺序建议：先读第 0 节（给接手者的话）→ 第 1 节（定位）→ 第 2 节（哲学）→ 第 4 节（做与不做）→ 第 6 节（路线图）。
+> 最后更新：2026-07-13
 
 ---
 
-## 2. 系统架构
+## 0. 给接手本项目的 AI 的话（务必先读）
 
-### 2.1 整体架构图
+如果你被指派来继续开发本项目，先理解以下几点，避免把项目带偏。这一节比任何代码都重要。
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      GxEngine 架构                          │
-├─────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
-│  │   Input     │  │   Audio     │  │   Script    │         │
-│  │   System    │  │   System    │  │   System    │         │
-│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘         │
-│         │                │                │                 │
-│  ┌──────┴────────────────┴────────────────┴──────┐         │
-│  │              ECS Core (World)                 │         │
-│  │  ┌─────────┐  ┌─────────┐  ┌─────────┐      │         │
-│  │  │Entities │  │Components│  │ Systems │      │         │
-│  │  └─────────┘  └─────────┘  └─────────┘      │         │
-│  └───────────────────────┬───────────────────────┘         │
-│                          │                                  │
-│  ┌───────────────────────┴───────────────────────┐         │
-│  │              Core Systems                     │         │
-│  │  ┌─────────┐  ┌─────────┐  ┌─────────┐      │         │
-│  │  │Rendering│  │ Physics │  │  Kinemat│      │         │
-│  │  │ System  │  │ System  │  │  System │      │         │
-│  │  └─────────┘  └─────────┘  └─────────┘      │         │
-│  └───────────────────────────────────────────────┘         │
-│                          │                                  │
-│  ┌───────────────────────┴───────────────────────┐         │
-│  │              Backend                          │         │
-│  │  ┌─────────┐  ┌─────────┐  ┌─────────┐      │         │
-│  │  │  wgpu   │  │ rapier3d│  │  winit  │      │         │
-│  │  └─────────┘  └─────────┘  └─────────┘      │         │
-│  └───────────────────────────────────────────────┘         │
-└─────────────────────────────────────────────────────────────┘
-```
+**1. 这是一个学习型项目，目的是"理解与观察"，不是"交付一款成品游戏"。**
+作者做这个项目，核心动机是亲手理解并观察物理现象之间的关系——碰撞、受力、光照、破坏如何互相影响，并能实时把玩它们。FPS 只是这个学习平台的**默认载体**，不是终点。任何决策，先问："它是否让作者更容易看懂、玩到、验证一个物理或渲染的想法？"
 
-### 2.2 模块依赖关系
+**2. 作者物理基础一般，且不享受"造轮子"本身。**
+因此物理与图形的**内核必须借助成熟库**（物理用 rapier3d，渲染用 wgpu 手写管线但不发明新算法）。你的精力应放在"把物理玩出花、把现象看清楚、把画面做好看"，而不是重新发明底层数学。当你要做技术选择时，永远优先选"能让作者更快看到直观结果"的那一个。
 
-```
-gxengine-core (ECS、数学库、基础类型)
-      │
-      ├── gxengine-renderer (wgpu 渲染后端)
-      │
-      ├── gxengine-physics (rapier3d 物理后端)
-      │
-      ├── gxengine-input (输入处理)
-      │
-      └── gxengine-asset (资产加载与管理)
-```
+**3. 这个项目基本只给作者一个人用。**
+不需要稳定的公开 API、向后兼容、防呆设计、面向他人的使用文档。设计取舍的最高优先级是**作者试想法的速度**。允许大胆、直给、随时推翻重来。
+
+**4. 不要重新引入已经废弃的旧方向。**
+本项目**曾**有一个独立的 C# 旧版原型（现已弃用，与本仓库无关），那一版早期文档提过"兼容 Source 2 / 起源引擎资产、做 GMod 式模组沙盒"。**这个方向已被正式放弃，不要复活它**：不要引入 ValveResourceFormat，不要解析 .vmdl/.vmat/.vpk，不要把"模组兼容""GMod 式内容引入"写进目标（原因见第 4 节）。
+
+**5. 判断任何新需求是否该做，用这把标尺：**
+> 它是否服务于"实时、可交互、可观察地把玩物理与渲染现象"这个学习内核？
+> 如果是——考虑做。如果它是为了"兼容别人的东西""做成给别人发布的产品""追求离线级科学仿真精度"——大概率不该做。
 
 ---
 
-## 3. 核心模块设计
+## 1. 项目定位
 
-### 3.1 ECS 核心 (gxengine-core)
+**一句话定位：**
 
-#### 3.1.1 设计理念
+> GxEngine 是一个**单人自用的、学习型实时 3D 物理与渲染试验台**。它以一个可玩的第一人称 FPS 沙盒为默认载体，借助成熟物理内核（rapier3d）和手写现代渲染管线（wgpu），让作者能在"能玩"的基础上，进一步**观察、慢放、可视化**物理现象背后的关系。
 
-采用成熟轻量级的 **`hecs`**（或其高度简化的安全仿制版）作为 ECS 核心容器，通过 Archetype-based 架构解决 Rust 的生命周期与借用检查难点，兼顾高性能与极致的借用安全：
+**两种可切换的形态（关键）：**
 
-- **Entity**：类型安全的轻量级 ID 标识（包含 Generation 以防止 ID 复用问题）
-- **Component**：纯数据结构（SoA/Archetype 紧凑存储），最大限度提高 CPU 缓存命中率
-- **System**：独立的逻辑函数/组件查询器，通过 `hecs` 的 `Query` 机制安全并发或单线程更新
+- **FPS 模式（默认，主要）**：打开即进入。第一人称、鼠标锁定，走关卡、开枪、抓取投掷物体、打假人。这是项目的默认体验和"活体 demo"——用真实玩法去验证物理和渲染做得对不对、爽不爽。
+- **上帝模式（可切换，可在设置中关闭）**：类似 Minecraft 创造模式的自由飞行。按键从玩家身体里"飞出来"，自由移动视角俯瞰全局，准星仍在。它不是另一套世界观，只是一个**观察和布置的自由视角**，方便从任意角度看物理、点选物体、摆场景。
 
-#### 3.1.2 核心数据结构与接口
+**它不是什么（同样重要）：**
 
-```rust
-use hecs::{World, Entity, Query};
-
-// 引擎核心容器包装
-pub struct EngineWorld {
-    pub ecs_world: World,
-}
-
-impl EngineWorld {
-    pub fn new() -> Self {
-        Self { ecs_world: World::new() }
-    }
-
-    // 生成新实体
-    pub fn spawn(&mut self) -> Entity {
-        self.ecs_world.spawn(())
-    }
-
-    // 添加组件
-    pub fn add_component<C: hecs::Component>(&mut self, entity: Entity, component: C) {
-        self.ecs_world.insert_one(entity, component).unwrap();
-    }
-
-    // 安全查询接口
-    pub fn query<'a, Q: Query<'a>>(&'a self) -> hecs::QueryBorrow<'a, Q> {
-        self.ecs_world.query::<Q>()
-    }
-}
-```
-
-#### 3.1.3 组件定义
-
-```rust
-// 基础组件
-pub struct Transform {
-    pub position: Vec3,
-    pub rotation: Quat,
-    pub scale: Vec3,
-}
-
-pub struct Velocity {
-    pub linear: Vec3,
-    pub angular: Vec3,
-}
-
-pub struct Health {
-    pub current: f32,
-    pub max: f32,
-}
-
-pub struct RenderMesh {
-    pub mesh_handle: Handle<Mesh>,
-    pub material_handle: Handle<Material>,
-}
-
-pub struct Collider {
-    pub shape: ColliderShape,
-    pub is_static: bool,
-}
-```
-
-### 3.2 渲染系统 (gxengine-renderer)
-
-#### 3.2.1 渲染管线架构
-
-采用前向渲染管线，通过引入 **PBR+IBL** 以及 **后处理多级链路** 确保中高端视觉效果（画质不塑料，高反光金属不黑）：
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                            前向 PBR+IBL 渲染管线                             │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  1. 场景遍历与剔除 → 收集可渲染对象，进行视锥体裁剪 (Frustum Culling)         │
-│  2. 阴影图生成 → 绘制方向光 Shadow Map (级联阴影) 以及点/聚光灯全向阴影映射   │
-│  3. 环境光预处理 → 离线或加载时计算 IBL 辐照度图 (Irradiance) 和辐射预滤波图  │
-│  4. 屏幕遮蔽渲染 → 计算屏幕空间环境光遮蔽 (SSAO) 纹理，增加暗部实体缝隙层次   │
-│  5. 主渲染 Pass → 执行 PBR 光照着色 (MSAA 4x 抗锯齿 + IBL 环境混合)           │
-│  6. HDR 后处理链路 → 提取高光 (Bloom 提取) → 模糊混合 → ACES Tone Mapping      │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-#### 3.2.2 渲染数据流与绑定组设计 (Bind Groups)
-
-为了极致降低渲染状态切换开销，wgpu 资源按更新频次被划分为三级绑定组：
-
-```rust
-// 绑定组 0 (每帧一次)：全局全局空间数据及环境 IBL
-pub struct GlobalBindGroup {
-    pub view_proj: Mat4,
-    pub camera_pos: Vec3,
-    pub time: f32,
-    pub ambient_light: Vec4,
-    pub irradiance_cubemap: wgpu::TextureView,      // IBL 漫反射天空反射
-    pub prefiltered_specular: wgpu::TextureView,    // IBL 镜面反射预滤波图
-    pub brdf_lut: wgpu::TextureView,                // BRDF 查找纹理
-}
-
-// 绑定组 1 (每个材质一次)：PBR 参数与贴图
-pub struct MaterialBindGroup {
-    pub base_color_factor: Vec4,
-    pub pbr_factors: Vec4, // x: metallic, y: roughness
-    pub albedo_map: wgpu::TextureView,
-    pub normal_map: wgpu::TextureView,
-    pub metallic_roughness_map: wgpu::TextureView,
-}
-
-// 绑定组 2 (每个物体一次)：变换与骨骼动画
-pub struct ObjectBindGroup {
-    pub model_matrix: Mat4,
-    pub joint_matrices: Vec<Mat4>, // 骨骼动画节点变换矩阵最大支持 256 骨骼
-}
-
-pub struct RenderPipeline {
-    pub device: wgpu::Device,
-    pub queue: wgpu::Queue,
-    pub surface: wgpu::Surface,
-    pub depth_texture: wgpu::Texture,
-    pub msaa_texture: wgpu::Texture, 
-    pub ssao_texture: wgpu::Texture, 
-    pub shader_cache: HashMap<String, wgpu::ShaderModule>,
-}
-```
-
-#### 3.2.3 材质系统
-
-```rust
-pub struct Material {
-    pub name: String,
-    pub albedo_factor: Color,
-    pub metallic: f32,
-    pub roughness: f32,
-    pub albedo_map: Option<Handle<Texture>>,
-    pub normal_map: Option<Handle<Texture>>,
-    pub metallic_roughness_map: Option<Handle<Texture>>,
-    pub occlusion_map: Option<Handle<Texture>>,
-    pub shader: Handle<Shader>,
-}
-```
-
-### 3.3 物理系统 (gxengine-physics)
-
-#### 3.3.1 物理世界封装
-
-```rust
-pub struct PhysicsWorld {
-    pub rigid_body_set: RigidBodySet,
-    pub collider_set: ColliderSet,
-    pub gravity: Vec3,
-    pub integration_parameters: IntegrationParameters,
-    pub physics_pipeline: PhysicsPipeline,
-    pub island_manager: IslandManager,
-    pub broad_phase: BroadPhase,
-    pub narrow_phase: NarrowPhase,
-    pub impulse_joint_set: ImpulseJointSet,
-    pub multibody_joint_set: MultibodyJointSet,
-    pub ccd_solver: CCDSolver,
-}
-```
-
-#### 3.3.2 碰撞体类型
-
-```rust
-pub enum ColliderShape {
-    Sphere { radius: f32 },
-    Cuboid { half_extents: Vec3 },
-    Capsule { radius: f32, half_height: f32 },
-    Mesh { vertices: Vec<Vec3>, indices: Vec<u32> },
-}
-```
-
-### 3.4 动力学系统 (gxengine-kinematics)
-
-#### 3.4.1 后坐力系统
-
-基于二阶弹簧阻尼模型：
-
-```
-m * d²x/dt² + c * dx/dt + k * x = F(t)
-
-其中：
-- m: 质量（惯性）
-- c: 阻尼系数（衰减速度）
-- k: 刚度（回正速度）
-- F(t): 脉冲力（开火时施加）
-```
-
-```rust
-pub struct RecoilSystem {
-    pub mass: f32,           // 惯性
-    pub damping: f32,        // 阻尼
-    pub stiffness: f32,      // 刚度
-    pub current_offset: Vec2, // 当前偏移
-    pub velocity: Vec2,      // 当前速度
-    pub impulse_queue: Vec<Vec2>, // 待处理脉冲
-}
-
-impl RecoilSystem {
-    pub fn apply_impulse(&mut self, impulse: Vec2) {
-        self.impulse_queue.push(impulse);
-    }
-
-    pub fn update(&mut self, dt: f32) {
-        // 处理脉冲队列
-        for impulse in self.impulse_queue.drain(..) {
-            self.velocity += impulse / self.mass;
-        }
-
-        // 弹簧阻尼积分
-        let spring_force = -self.stiffness * self.current_offset;
-        let damping_force = -self.damping * self.velocity;
-        let acceleration = (spring_force + damping_force) / self.mass;
-
-        self.velocity += acceleration * dt;
-        self.current_offset += self.velocity * dt;
-    }
-}
-```
-
-#### 3.4.2 IK 系统
-
-FABRIK (Forward And Backward Reaching Inverse Kinematics) 实现：
-
-```rust
-pub struct IKSolver {
-    pub max_iterations: u32,
-    pub tolerance: f32,
-}
-
-impl IKSolver {
-    pub fn solve(
-        &self,
-        joints: &mut [Vec3],
-        target: Vec3,
-        constraints: &[JointConstraint],
-    ) {
-        let base = joints[0];
-        let chain_length = joints.len();
-
-        for _ in 0..self.max_iterations {
-            // Forward reaching
-            joints[chain_length - 1] = target;
-            for i in (1..chain_length).rev() {
-                let direction = (joints[i] - joints[i - 1]).normalize();
-                joints[i - 1] = joints[i] - direction * constraints[i].length;
-            }
-
-            // Backward reaching
-            joints[0] = base;
-            for i in 0..chain_length - 1 {
-                let direction = (joints[i + 1] - joints[i]).normalize();
-                joints[i + 1] = joints[i] + direction * constraints[i + 1].length;
-            }
-
-            // 检查收敛
-            if (joints[chain_length - 1] - target).magnitude() < self.tolerance {
-                break;
-            }
-        }
-    }
-}
-```
-
-#### 3.4.3 射线检测
-
-```rust
-pub struct Ray {
-    pub origin: Vec3,
-    pub direction: Vec3,
-    pub max_distance: f32,
-}
-
-pub struct RaycastHit {
-    pub point: Vec3,
-    pub normal: Vec3,
-    pub distance: f32,
-    pub entity: Entity,
-}
-
-pub struct RaycastSystem {
-    pub physics_world: PhysicsWorld,
-}
-
-impl RaycastSystem {
-    pub fn cast_ray(&self, ray: Ray) -> Option<RaycastHit> {
-        // 使用 rapier3d 的 raycast 功能
-        // 返回最近的碰撞点
-    }
-}
-```
-
-### 3.5 输入系统 (gxengine-input)
-
-```rust
-pub struct InputState {
-    pub mouse_delta: Vec2,
-    pub mouse_position: Vec2,
-    pub keys: HashMap<KeyCode, ButtonState>,
-    pub mouse_buttons: HashMap<MouseButton, ButtonState>,
-}
-
-pub enum ButtonState {
-    Pressed,
-    Released,
-    Held,
-}
-
-pub struct InputSystem {
-    pub state: InputState,
-    pub event_queue: Vec<InputEvent>,
-}
-```
-
-### 3.6 资产系统 (gxengine-asset)
-
-```rust
-pub struct AssetManager {
-    pub meshes: AssetStore<Mesh>,
-    pub textures: AssetStore<Texture>,
-    pub materials: AssetStore<Material>,
-    pub shaders: AssetStore<Shader>,
-}
-
-pub struct AssetStore<T> {
-    assets: HashMap<Handle<T>, T>,
-    next_handle: u64,
-}
-
-pub struct Handle<T> {
-    pub id: u64,
-    pub _marker: PhantomData<T>,
-}
-```
+- 不是通用商用游戏引擎（不追求通用、不面向他人开发）。
+- 不是一款要发布的游戏（FPS 是学习载体，不是要打磨上线的产品）。
+- 不是内容兼容平台（不做模组兼容，见第 4 节）。
+- 不是离线科学仿真器（要的是"实时、够真、能玩"，不是能量严格守恒、可对照实验的仿真）。
 
 ---
 
-## 4. 资源策略
+## 2. 设计哲学（五条性格）
 
-### 4.1 美术资源方案
+这五条是本项目所有具体决策的来源。任何时候拿不准，回到这里。
 
-由于没有美术资源，采用以下策略：
+**2.1 学习优先，玩法是载体。**
+每加一个东西，都应该让作者对"物理/渲染是怎么回事"多懂一点，或多一个能直观观察的窗口。为炫技而炫技、为兼容别人而兼容，都不做。
 
-#### 4.1.1 占位资源
+**2.2 尽量"可观察"。**
+在能玩的基础上，逐步让平时看不见的物理量变得可见：速度矢量、受力方向、碰撞点、接触法线、刚体的睡眠/唤醒状态等，能一键叠加为箭头 / 线框 / 热力色。一个只会渲染漂亮画面的沙盒，和一个能让人看见"力如何传播"的沙盒，是两个不同的东西——在力所能及处，向后者靠。
 
-- **几何体**：使用程序化生成的基本形状
-  - 立方体、球体、圆柱体、平面
-  - 可通过参数调整细分级别
+**2.3 时间是可以掌控的。**
+**暂停 + 单步 + 慢放**是观察物理的核心能力：现实里子弹击中箱子的瞬间看不清，在这里可以逐帧掰开看。项目已有 `time_scale` 机制作地基（见第 5 节），应把它接成可用的调试能力。**实现原理见 5.5——慢放只缩放时间累加器，绝不缩放物理步长，否则物理行为会随倍速漂移。**
 
-- **材质**：纯色 + 简单纹理
-  - 基础颜色：白、灰、黑
-  - 棋盘格纹理（程序化生成）
-  - 法线贴图：平法线（0,0,1）
+**2.4 分层生长，每层都能立刻玩到 / 看到。**
+按明确顺序一层层往上搭，且**每加一层都能立刻打开窗口看到新东西**，不允许"搭三个月才见效果"的枯燥期。这是靠兴趣驱动的单人项目能否坚持下去的命门。
 
-- **光照**：简单的方向光 + 环境光
-  - 默认方向光：(1, -1, 0.5)
-  - 环境光强度：0.1
-
-#### 4.1.2 测试场景
-
-```rust
-pub struct TestScene {
-    pub ground: Entity,      // 大型平面
-    pub walls: Vec<Entity>,  // 墙壁立方体
-    pub targets: Vec<Entity>, // 射击目标
-    pub player: Entity,      // 玩家实体
-}
-
-impl TestScene {
-    pub fn create(world: &mut World) -> Self {
-        // 创建地面
-        let ground = world.spawn();
-        world.add_component(ground, Transform {
-            position: Vec3::new(0.0, -0.5, 0.0),
-            scale: Vec3::new(100.0, 1.0, 100.0),
-            ..Default::default()
-        });
-        world.add_component(ground, RenderMesh {
-            mesh_handle: assets.create_cube(),
-            material_handle: assets.create_material(Color::GRAY),
-        });
-        world.add_component(ground, Collider {
-            shape: ColliderShape::Cuboid {
-                half_extents: Vec3::new(50.0, 0.5, 50.0)
-            },
-            is_static: true,
-        });
-
-        // 创建墙壁
-        let mut walls = Vec::new();
-        for i in 0..5 {
-            let wall = world.spawn();
-            world.add_component(wall, Transform {
-                position: Vec3::new(i as f32 * 3.0, 1.5, -5.0),
-                scale: Vec3::new(2.0, 3.0, 0.2),
-                ..Default::default()
-            });
-            // ... 其他组件
-            walls.push(wall);
-        }
-
-        // 创建射击目标
-        let mut targets = Vec::new();
-        for i in 0..3 {
-            let target = world.spawn();
-            world.add_component(target, Transform {
-                position: Vec3::new(i as f32 * 4.0 - 4.0, 1.0, -10.0),
-                scale: Vec3::new(1.0, 1.0, 0.1),
-                ..Default::default()
-            });
-            // ... 其他组件
-            targets.push(target);
-        }
-
-        // 创建玩家
-        let player = world.spawn();
-        world.add_component(player, Transform {
-            position: Vec3::new(0.0, 1.6, 0.0),
-            ..Default::default()
-        });
-        world.add_component(player, Camera::default());
-        world.add_component(player, PlayerController::default());
-
-        TestScene { ground, walls, targets, player }
-    }
-}
-```
-
-#### 4.1.3 程序化资源生成
-
-```rust
-pub struct ProceduralGenerator;
-
-impl ProceduralGenerator {
-    pub fn create_cube() -> Mesh {
-        // 生成立方体顶点和索引
-    }
-
-    pub fn create_sphere(segments: u32, rings: u32) -> Mesh {
-        // 生成球体
-    }
-
-    pub fn create_plane(size: f32) -> Mesh {
-        // 生成平面
-    }
-
-    pub fn create_checkerboard_texture(size: u32) -> Texture {
-        // 生成棋盘格纹理
-    }
-}
-```
-
-### 4.2 外部资源资产加载与管线标准
-
-为了最大化资产兼容性、减小引擎体积并提高运行时性能，GxEngine 遵循“**强统一运行时，外部高兼容转换**”的资产策略：
-
-#### 4.2.1 运行时资产规范
-
-- **3D 场景与模型标准**：**唯一支持 glTF 2.0 / GLB 格式**。
-  - 引擎不再直接提供 FBX、OBJ、MAX、Blend 等繁复格式的引擎内原生解析。
-  - 所有非 glTF 美术资产，必须在外部 DCC 工具（如 Blender, Maya）中一键导出为标准的 `.gltf`（纹理分离）或 `.glb`（资源打包）格式再加载入引擎。
-  - 支持完整的 glTF node 树状层级、网格体（Indices & Vertex Buffers）、基本材质（基于 PBR MR 模型）以及骨骼关键帧动画。
-- **纹理资产**：
-  - 运行时直接读取：PNG, JPEG（基础通道）、HDR 辐射度图（天空盒与 IBL 预计算源）。
-  - （规划升级）**KTX2 / Basis Universal** 纹理压缩标准：在引擎后期，离线阶段将常规纹理压缩为 KTX2 (BC7/ASTC) 块压缩纹理，直接在 GPU 中读取而无需运行时解压，显存占用降低 75%。
-- **着色器资产**：
-  - 原生 WGSL (.wgsl) 着色器。通过 wgpu 在运行时热重载编译或预缓存。
-
-#### 4.2.2 资产预处理管线 (Asset Cooking) [离线工具集]
-
-在生产环境下，采用一个简单的离线脚本或命令行工具：
-1. 监视 `assets/raw/` 原始素材目录。
-2. 当有 OBJ/FBX 变动时，调用后台 Blender 命令行或第三方轻量级转换组件（如 `gltf-pipeline` / `assimp-cli`），自动生成 `assets/models/*.glb` 并输出至运行时资产夹。
-3. 对大尺寸高画质纹理执行 `basisu` 压缩，转为 `.ktx2` 并生成材质关联 JSON 描述文件。
+**2.5 内核借力，表现与玩法自造。**
+成熟库负责"算得对、跑得稳"（rapier3d 物理、wgpu 图形抽象）；作者与 AI 的精力全花在"怎么玩、怎么看清、怎么变好看"。不啃方程，不重造底层数学。
 
 ---
 
-## 5. 输入绑定
+## 3. 代码现状（诚实记录，接手者先看这里再看路线图）
 
-### 5.1 默认键位
+> 这一节记录截至最后更新日，**已经真正跑起来**的东西，避免接手者把"已完成"当"待办"。最权威的现状永远以 `README.md` 和 `cargo run` 实际表现为准。
 
-| 操作 | 键位 |
-|------|------|
-| 移动 | WASD |
-| 跳跃 | Space |
-| 蹲下 | Left Ctrl |
-| 射击 | 鼠标左键 |
-| 瞄准 | 鼠标右键 |
-| 切换武器 | 1-5 |
-| 重载 | R |
-| 交互 | E |
-| 暂停 | Escape |
+**技术栈（实际，见 `Cargo.toml`）：** Rust 2021 / winit 0.30 / wgpu 29 / rapier3d 0.33 / hecs 0.11 / glam 0.33 / kira 0.12（音频）/ gltf 1.4。
 
-### 5.2 鼠标设置
+**已引入（2026-07-26）：** `egui 0.35` + `egui-wgpu` + `egui-winit`（均匹配 wgpu 29 / winit 0.30）。F1 打开调试面板：时间倍速/单步、重力预设（月球/地球/木星/无重力）、曝光、天气、龙卷风强度半径、浪高、可视化图层开关全部为实时滑块。widget 代码在 `game/systems/debug_panel.rs`（游戏层），egui 管线在 `renderer/debug_ui.rs`（渲染层，不知晓 gameplay 类型——与 overlay 的分层违规相反，这是正确的分法）。
 
-```rust
-pub struct MouseSettings {
-    pub sensitivity: f32,      // 默认 0.1
-    pub invert_y: bool,        // 默认 false
-    pub raw_input: bool,       // 默认 true
-}
-```
+**已完成并可运行：**
 
----
+- 窗口与主循环：winit + wgpu，最高 144 FPS，可 resize。
+- ECS：hecs 世界 + 自研 `Resources` 容器 + 分阶段 `Schedule` 调度器（Stage: Startup/PreUpdate/Update/FixedUpdate/LateUpdate/PreRender/Render/PostRender）。
+- 物理：rapier3d 世界、刚体/碰撞体、射线检测、物理同步、物理 sandbox（质量差异、摩擦/弹性材质、坡道、冰面、滑块、可击倒靶）。
+- 渲染：PBR 前向渲染、方向光阴影、程序化 IBL、SSAO、Bloom、ACES tone mapping。
+- 资产：程序化几何体（cube/sphere/cylinder/plane/rifle）、基础 glTF/GLB 静态网格加载。
+- FPS 玩法：第一人称相机、玩家移动、射击射线、后坐力、简单敌人 AI、抓取/拾取/投掷/冻结物体、击中反馈（高亮闪光 + 顿挫 + 击退 + 击杀爆点）。
+- 数据驱动场景：关卡几何体 / 材质 / 灯光 / 敌人布局从 `assets/scenes/*.json` 加载，改场景不用重编译；启动场景是 dust2 风格关卡，另有 `sandbox.json` 物理 playground；磁盘读不到时回退到嵌入二进制的默认场景，不崩。
+- 设置菜单：Esc 打开，释放鼠标，可切分辨率和语言（简体中文）。
+- 观察三件套已有可用第一版：暂停/单步/倍速、FPS/上帝模式切换，以及碰撞体/速度/接触信息图层；状态统一显示在 HUD。
+- 玩家与交互物理已成熟化：运动学胶囊角色控制器、台阶/坡面/贴地、防薄墙穿透、固定步抓取形状扫掠、铰链门阻挡回开、爆炸遮挡。
+- 默认 dust2 风格场景已完成一轮细节扩建（285 个实体），并加入独立敌人巡逻路线和更多可互动/可爆炸物件。
 
-## 6. 游戏循环
+**关键地基（做后续功能时先复用，别重造）：**
 
-### 6.1 主循环流程
+- `src/core/time.rs` 的 `Time.time_scale`：物理与逻辑更新已乘以它。**慢放≈设 0.1，暂停≈设 0**，时间控制几乎是接线的活。
+- `src/core/schedule.rs` 的 `Schedule`：系统按 Stage 分组、可 `add_system` / `clear_stage`。**"模式切换"本质是换一批挂载的系统**，架构天生支持。
+- 鼠标锁定由 `MouseLocked` 资源驱动（菜单打开时释放）。**模式切换时复用这套控制光标锁定/可见**。
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    主游戏循环                            │
-├─────────────────────────────────────────────────────────┤
-│  1. 处理窗口事件 (winit)                                │
-│  2. 收集输入状态                                        │
-│  3. 更新 ECS 系统：                                     │
-│     - Input System                                      │
-│     - Player Controller                                 │
-│     - Physics System (固定时间步长)                     │
-│     - Kinematics System (后坐力、IK)                    │
-│     - Animation System                                  │
-│  4. 渲染：                                              │
-│     - 收集渲染数据                                      │
-│     - 执行渲染管线                                      │
-│     - 呈现画面                                          │
-│  5. 计算帧时间，控制帧率                                │
-└─────────────────────────────────────────────────────────┘
-```
+**2026-07-26 大扩建补记（现状以 README 为准，这里只记方向与债务）：**
 
-### 6.2 时间管理
+本轮在"学习平台"之上长出了一个完整的 FPS 游戏 demo 层：场景热加载 + Esc 枢纽菜单、config.json 持久化、天气系统（雨/雪/随机）、水面渲染（透明管线+菲涅尔）、龙卷风/浮力/可破坏建筑三套物理秀、5v5 回合制 bot 对战（队伍/经济/购买/C4/记分板）、五种程序化枪模与换弹动画。这与"FPS 只是载体"的定位有张力，但判断为健康偏移：每一件都在"实时把玩物理/渲染现象"的标尺内或直接服务于把玩的乐趣。**接手者注意：games 层可以大胆推翻，`core/physics/renderer` 的地基不要为 gameplay 妥协。**
 
-```rust
-pub struct Time {
-    pub delta: Duration,      // 帧间隔
-    pub elapsed: Duration,    // 游戏运行总时间
-    pub fixed_timestep: f32,  // 物理固定时间步长 (1/60)
-    pub time_scale: f32,      // 时间缩放
-}
+**已知架构债务（按痛感排序，不急但要知道）：**
 
-impl Time {
-    pub fn delta_seconds(&self) -> f32 {
-        self.delta.as_secs_f32() * self.time_scale
-    }
-}
-```
+1. **分层违规**：`renderer/overlay` 直接 import `game` 的菜单/交互类型（`PauseMenu`、`InteractionFocus`）。渲染层本不该知道游戏层。修法是把 UI 数据结构下沉到中立模块或用 trait 解耦；在 overlay 大改前不值得单独动。
+2. **match_mode.rs 走向巨石**（~700 行：bot AI + 回合状态机 + C4 + 经济记账）。下次给它加功能前先拆：`bot_ai.rs` / `round.rs` / `bomb.rs`。
+3. **bot 寻路无导航网格**：直线走 + 撞墙换目标，复杂拐角会卡。下一个大件是路点图 A*。
+4. **场景生成器用字符串替换打补丁的历史**：曾两次静默失败（替换文本不匹配导致内容丢失）。现在场景断言测试兜底；将来改生成器直接改 Python 源，不要再用 patch 脚本。
+5. **确定性伪随机**：命中判定/天气/比赛随机全部用位置派生或 LCG（引擎无 RNG 依赖）。同位置连射命中序列固定，竞技性玩法需要换真随机。
+
+**已知待清理 / 不一致：**
+
+- `kira` 已引入，音频全部为程序合成（枪声/爆炸/受击/雨声/C4 哔声），实际以 `src/audio/mod.rs` 为准；**不引入独立脚本语言**，游戏逻辑就用 Rust 写（见第 4 节）。
+- ~~egui 调试面板仍未接入~~ 已接入（见上）。
 
 ---
 
-## 7. 项目结构
+## 4. 边界：做什么，不做什么
 
-```
-gx3d/
-├── Cargo.toml
-├── src/
-│   ├── main.rs                 # 程序入口
-│   ├── lib.rs                  # 库入口
-│   ├── core/                   # 核心模块
-│   │   ├── mod.rs
-│   │   ├── ecs.rs              # ECS 实现
-│   │   ├── math.rs             # 数学工具
-│   │   ├── transform.rs        # 变换组件
-│   │   └── time.rs             # 时间管理
-│   ├── renderer/               # 渲染系统
-│   │   ├── mod.rs
-│   │   ├── pipeline.rs         # 渲染管线
-│   │   ├── mesh.rs             # 网格数据
-│   │   ├── material.rs         # 材质系统
-│   │   ├── texture.rs          # 纹理管理
-│   │   └── shader.rs           # 着色器管理
-│   ├── physics/                # 物理系统
-│   │   ├── mod.rs
-│   │   ├── world.rs            # 物理世界
-│   │   ├── collider.rs         # 碰撞体
-│   │   └── raycast.rs          # 射线检测
-│   ├── kinematics/             # 动力学系统
-│   │   ├── mod.rs
-│   │   ├── recoil.rs           # 后坐力系统
-│   │   ├── ik.rs               # IK 系统
-│   │   └── camera.rs           # 摄像机控制
-│   ├── input/                  # 输入系统
-│   │   ├── mod.rs
-│   │   ├── keyboard.rs         # 键盘输入
-│   │   └── mouse.rs            # 鼠标输入
-│   ├── asset/                  # 资产系统
-│   │   ├── mod.rs
-│   │   ├── loader.rs           # 资产加载器
-│   │   ├── mesh_loader.rs      # 网格加载
-│   │   └── texture_loader.rs   # 纹理加载
-│   └── game/                   # 游戏逻辑
-│       ├── mod.rs
-│       ├── player.rs           # 玩家控制器
-│       └── weapon.rs           # 武器系统
-├── assets/                     # 资源目录
-│   ├── shaders/                # 着色器文件
-│   │   ├── basic.wgsl
-│   │   └── pbr.wgsl
-│   ├── textures/               # 纹理文件
-│   │   └── placeholder.png
-│   └── models/                 # 模型文件
-│       └── (待添加)
-├── docs/                       # 文档目录
-│   ├── DESIGN.md               # 设计文档
-│   └── API.md                  # API 文档
-└── tests/                      # 测试目录
-    ├── ecs_test.rs
-    ├── physics_test.rs
-    └── renderer_test.rs
-```
+### 4.1 做
+
+- 实时刚体物理：碰撞、堆叠、摩擦、弹性、约束（铰链、绳、弹簧等，按需推进）。
+- 两种模式：FPS（默认）+ 可切换/可关闭的上帝飞行模式。
+- 时间控制：暂停、单步、慢放、快放。
+- 物理可视化图层：把力、速度、碰撞点、接触法线等画成可视元素，可逐项开关。其中**最基础的碰撞体线框应尽早做**（rapier 内置 `DebugRenderPipeline` 能直接输出线框顶点，wgpu 加一个纯色线条 pass 即可），因为它在做 L3 抓取施力等交互时是排错利器。
+- 上帝之手交互：点选、拖动、施加冲量、生成、删除物体（射线已有，等于白捡基础）。
+- 导入网上的**标准格式静态模型**（glTF / GLB）作为"形状"，套上刚体进入物理世界。
+- 现代实时渲染表现：PBR、方向光阴影、IBL、SSAO、Bloom、ACES（大部分已完成，持续打磨观感）。
+- 远期实验层（见 4.3）：假动态水面、结构破坏、更进阶效果等。
+
+### 4.2 明确不做（以及为什么）
+
+- **不做 Source 2 / 起源引擎资产兼容、不做 GMod 式"内容引入"。** 论证过的无底洞：加载模型只占"兼容"的 1%，真正的模组依赖整套 Source 运行时语义（实体系统、Lua、物理行为、材质代理），复刻它等于复刻整个引擎，非单人可为，且与学习内核无关。区分清楚：**导入模型的"形状"可以做且该做；但让模型"像在 GMod 里那样活起来"（车能开、人是布娃娃）不是靠兼容白得的，而是要在本项目物理内核上自己实现的玩法**（见第 5 节"形状 vs 行为"）。
+- **不做体素 / 无限世界（Minecraft、7 Days to Die 那一半）。** 体素世界的核心难点在数据结构与区块流式加载，与"连续真实物理"的内核背道而驰，与作者的学习目标错位，主动放弃。（注意：作者要的"上帝模式飞行"只是借用 MC 的**自由飞行手感**，不是要做体素世界。）
+- **不做离线级科学仿真精度。** 要的是"看着爽、能实时互动、又不太脱离物理规律"，属于实时刚体物理档位。
+- **不引入独立脚本语言（Lua/Rhai 等）。** 单人项目，游戏逻辑直接用 Rust 写即可，别为"可脚本化"这种面向他人的能力增加复杂度。
+- **不为当前用不上的性能重构核心。** 例如不为"多核调度"去把 hecs 换成 bevy_ecs、不为"大量动态光源"提前上 Clustered Forward——这些是场景规模真正卡住时才考虑的远期备选，现在做只会拖慢主线。
+- 不做多人联机、完整关卡编辑器、面向他人的发布版本。
+
+### 4.3 远期实验层（记录方向，不急于开工）
+
+底座稳固后可往上长的实验，各自可独立分档、按兴趣推进：
+
+- **动态水面**：从"会滚动法线贴图的假水面"（易）→ 高度场可被扰动起波纹（中）→ 真流体 SPH/网格（难，非必须）。参考取自一张 CS2 社区地图截图：那种漂亮泳池水面**不是流体模拟**，而是平面 + 滚动法线 + 反射折射 + 循环焦散贴图，属"假动态水面"档，便宜、好做、观感好。
+- **结构破坏**（The Finals 式）：从"物体炸成预切碎块，每块独立刚体"（易）→ 约束连接的砖墙局部垮塌（中）→ 任意切割 + 应力传播（难，先别碰）。
+- **物体行为**：~~布娃娃~~（✅ 2026-07-26：K 键生成 11 刚体 + 10 球关节的约束链娃娃，可抓取投掷冻结）；车辆物理、更复杂的门约束等继续按需推进。
+- **骨骼蒙皮动画 / IK**：让导入的角色模型动起来、脚贴地形、手贴枪。属于内容扩展层，非当前重点。
 
 ---
 
-## 8. 开发阶段与增量式迭代路线图
+## 5. 关键认知（防止未来走弯路）
 
-为了保障项目能稳健运行，避免 Rust 编译器庞大的借用生命周期开销与 GPU 调试噩梦，**严格禁止一次性将全部系统编完**。引擎应遵循以下 **优先级（先做什么，后做什么）** 进行阶段式增量迭代开发：
+在设计讨论中反复确认、且容易被搞错的关键区分。理解这些能省下大量弯路。
 
-```
-第一阶段：窗口与最小渲染 MVP (底层骨架)
-      │
-      ▼
-第二阶段：引入 hecs ECS 与组件数据更新 (驱动逻辑)
-      │
-      ▼
-第三阶段：集成 rapier3d 物理与 FPS 玩家控制器 (交互骨架)
-      │
-      ▼
-第四阶段：PBR+IBL 材质与全向阴影 (画质飞跃)
-      │
-      ▼
-第五阶段：glTF 骨骼蒙皮动画与 IK 系统结合 (高级内容扩展)
-```
+**5.1 "形状"与"行为"是两件事，难度差十万八千里。**
+从网上下载的模型文件（glTF/GLB）里**只有形状和贴图**，没有任何行为。所以：导入模型、显示、套碰撞盒当刚体——简单，该做；让车能开、人是布娃娃、门能撞开——这些行为**不在模型文件里**，必须自己实现，是玩法层的活，也正是作者享受的学习部分。不要指望"导入一个模型"就白得了它的行为。
 
-### 🚀 第一阶段：窗口与最小渲染 MVP 搭建 (高优先级 - 最先进行)
+**5.2 好看的画面，主要来自"聪明的近似"，不是昂贵的模拟。**
+（结论来自对一张 CS2 社区地图截图的分析——通透室内光 + 漂亮泳池水面。）那种柔和通透的室内光，在 Source 里是**离线烘焙**进光照贴图的，运行时几乎不花性能，**但代价是场景必须静态**。本项目世界是动态的（能砸、能塌、能生成物体），因此走**实时近似**路线：方向光 + IBL + SSAO + 后处理（Bloom / ACES）——这些**已经在做了**，能拿到约八成观感且兼容动态世界。这是有意的取舍，别为追求极致观感去搞与动态世界冲突的烘焙光照。
 
-**目标**：初始化依赖，配置 wgpu 交换链，在窗口中稳定渲染出一个单色/顶点色旋转立方体。
-- **任务流程**：
-  1. [ ] 初始化 `Cargo.toml` 项目，配置 `winit`, `wgpu`, `glam` 等最核心依赖。
-  2. [ ] 封装 winit 窗口，搭建基础窗口事件循环（Event Loop）。
-  3. [ ] 编写 wgpu 底层初始化（包括 Adapter、Device、Queue，以及 Surface、SwapChain 配置）。
-  4. [ ] 编写简单的 WGSL 顶点/片元着色器，上传硬编码的立方体顶点数据与 Projection 变换矩阵。
-  5. [ ] 实现基础帧循环（Frame Render Loop），执行 Clear Color 擦除并完成 Draw Call。
-- **测试与验证**：`cargo run` 能在 Windows 窗口中以稳定 60 FPS+ 呈现一个旋转的 3D 立方体，缩放窗口时渲染画面无拉伸且能自动 resize。
+**5.3 画面"变高级"的性价比顺序（渲染层内部）：**
+PBR + 方向光/阴影 + IBL + SSAO + 后处理这套"组合拳"贡献了绝大部分观感提升，且有成熟套路、每层立刻见效。项目现状已覆盖主要项，后续以打磨参数、加风格化材质为主，优先于任何昂贵新特效。
 
-### ⚙️ 第二阶段：集成 `hecs` ECS 系统 (中高优先级)
-
-**目标**：引入高效率组件库，将实体（Entity）与组件（Component）的存取逻辑从渲染底层解耦，用数据更新驱动实体。
-- **任务流程**：
-  1. [ ] 引入 `hecs` 依赖，设计包装 `EngineWorld`。
-  2. [ ] 提取 `Transform` 和 `RenderMesh` 组件，重构第一阶段的绘制循环，包装为 `RenderingSystem`。
-  3. [ ] 编写时间管理器（Time），添加 `MovementSystem`，安全地通过 Query 机制查询并修改带有 `Velocity` 组件实体的 `Transform` 坐标。
-  4. [ ] 编写基础程序化几何体生成器（ProceduralGenerator），生成用于测试的地面、墙壁和大量漂浮立方体。
-- **测试与验证**：场景中生成 1,000 个带 `Transform` 和 `Velocity` 的立方体，渲染帧率不下降，CPU 与 GPU 能够流畅渲染和位移组件。
-
-### 🎮 第三阶段：物理系统集成与第一人称控制器 (中优先级)
-
-**目标**：引入 `rapier3d` 物理模拟，捕获键盘鼠标输入，实现第一人称视角 FPS 玩家漫游以及场景刚体碰撞。
-- **任务流程**：
-  1. [ ] 引入 `rapier3d`，建立 `PhysicsWorld` 核心系统，设置重力与固定步长（1/60s）。
-  2. [ ] 编写物理同步调度系统（PhysicsSyncSystem）：在物理运行前将 Kinematic 刚体的 `Transform` 同步进 Rapier；在模拟后将 Dynamic 刚体的物理坐标同步回 `Transform`。
-  3. [ ] 编写 `InputSystem`，精确捕获 winit 键盘 WASD / Space / Ctrl 状态与鼠标每帧 Delta 偏移量。
-  4. [ ] 结合 Rapier 的 Character Controller 编写 `PlayerControllerSystem`，实现摄像机第一人称视角俯仰角转换与带重力的物理移动。
-  5. [ ] 编写物理射线检测系统（RaycastSystem），实现射击准星与场景物体的瞬间交点检测。
-- **测试与验证**：玩家可以通过 WASD 控制第一人称视角移动，遇到墙壁能阻挡，掉落边缘会受重力下落，对准地面箱子开枪能发射射线检测到实体 ID。
-
-### 🎨 第四阶段：画质飞跃与环境物理渲染 (中低优先级)
-
-**目标**：提升视觉表现，从“开发画质”迈向“3D 现代画质”，杜绝廉价塑料感与边缘死白。
-- **任务流程**：
-  1. [ ] 扩展 WGSL 着色器，引入标准 PBR (Cook-Torrance BRDF) 数学公式（包括 Normal map、Roughness、Metallic 解析）。
-  2. [ ] **核心步骤**：引入天空盒材质与 **IBL（基于图像的光照）预处理**。提取环境 HDR 立方体贴图，烘焙生成 Irradiance Map 和 Prefiltered Map，确保金属与粗糙表面在阴影下能正确漫反射与镜面反射天空环境。
-  3. [ ] 支持级联方向光阴影（Cascaded Shadow Maps）以遮蔽日光，同时引入点光源立方体深度贴图（Omnidirectional Shadow Maps）支持局部光源投射阴影。
-  4. [ ] 引入后处理管线多级渲染链：主渲染绘制到 HDR RGBA16Float 帧缓冲区 → 经过 Bloom（发光拉伸）提取发光物体 → 叠加至 ACES 曲线进行 Tone Mapping 降噪防曝光，最终输出至 SwapChain 呈现。
-  5. [ ] 实现多重采样抗锯齿（MSAA 4x）和简单的环境光遮蔽（SSAO），提升物体相接处的重量感。
-- **测试与验证**：生成金属球、粗糙球、镜面球，观察其在太阳光和阴影中是否都有来自天空反射的高质感画面；进入室内点亮一个灯泡，光源周围产生 Bloom光晕，物体在灯光下能产生正确的点光源阴影。
-
-### 🦕 第五阶段：外部资产解析、骨骼蒙皮动画与高级 Kinematics (低优先级 - 最后做)
-
-**目标**：彻底打通高自由度美术资源。加载带骨骼、网格和动画的 `.glb` 文件，并融入高级动力学系统。
-- **任务流程**：
-  1. [ ] 编写 `glTF` 资源解析器（通过 `gltf` 库），读取 `.glb` 文件的完整节点树层级关系、PBR 材质集及动画关键帧数据。
-  2. [ ] 在顶点着色器中实现 Vertex Skinning 顶点蒙皮着色器，支持 4 骨骼权重混合渲染。
-  3. [ ] 编写 `AnimationSystem`，根据时间插值骨骼节点的 Local 旋转和位移，动态合成当前帧骨骼变换矩阵数组（上传至 Bind Group 2 传递给 GPU）。
-  4. [ ] 结合骨骼树层级，完善 **FABRIK IK 求解器**。将解算出的世界空间坐标映射回骨骼局部四元数旋转，实现脚部贴合复杂地形（IK Foot Placement）与手部贴紧枪支组件。
-  5. [ ] 挂载二阶弹簧阻尼后坐力（RecoilSystem）至玩家 Camera 节点，完成开火瞬间脉冲插值摄像机抖动。
-- **测试与验证**：在外部下载一个带开火/跑步动画的 glb 人物模型，引擎能流畅渲染动画；玩家开火时，相机有平滑反弹抖动的后坐力效果；当人物走上斜坡，其双脚高度能通过 IK 自动弯曲膝盖并稳稳踩在斜坡面上。
+**5.4 "模式切换"不是重写，是换系统。**
+FPS 模式和上帝模式共享同一个世界、同一套物理、同一套渲染。区别只在于：挂哪批系统（玩家控制器/武器 vs 自由飞行相机）、相机怎么算、鼠标锁不锁。靠现有 `Schedule` + `MouseLocked` 就能实现，不要为切模式复制世界或重建场景。
 
 ---
 
-## 9. 依赖配置
+## 6. 路线图（分层生长，从近到远）
 
-```toml
-[package]
-name = "gxengine"
-version = "0.1.0"
-edition = "2021"
+原则：**每一层完成后都应能立刻打开窗口玩到 / 看到新东西。** 顺序可微调，但"时间控制 → 模式切换 → 可视化"这个观察三件套的前后关系不宜打乱。**例外：碰撞体线框可视化是排错利器，建议在 L1/L2 期间就顺手做掉，不必等到 L4**（见下）。
 
-[dependencies]
-# 窗口和事件
-winit = "0.30"
-# 图形 API
-wgpu = "29.0"
-# 数学库
-glam = "0.33"
-# 物理引擎
-rapier3d = "0.32"
-# 图像加载与基础转换
-image = "0.25"
-# glTF 加载
-gltf = "1.4"
-# 高效轻量级 ECS 容器
-hecs = "0.11"
-# 音频系统
-kira = "0.12"
-# 日志与辅助调试
-log = "0.4"
-env_logger = "0.11"
-# 错误处理与抽象
-anyhow = "1.0"
-thiserror = "2.0"
-# 并发 (用于特定并行计算如烘焙)
-rayon = "1.10"
-# 序列化与配置
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+> 现状：L0 的能玩底座（FPS、物理、渲染、数据驱动场景）**已完成**，见第 3 节。以下从"把学习/观察能力接上"开始。
 
-[dev-dependencies]
-criterion = "0.5"
+### L1. 时间控制（当前最高优先级，性价比最高）
+把已有的 `time_scale` 接成可用调试能力：按键切换暂停 / 慢放（如 0.25×、0.1×）/ 恢复；暂停态下支持单步（手动触发一次 fixed update）。
+
+**实现原理（务必遵守，别改坏）：慢放只缩放"真实时间累加器的增长速度"，绝不缩放喂给物理的步长。** 也就是 `accumulator += real_delta * time_scale`，而每次 `should_fixed_update` 扣除的永远是**恒定**的 `fixed_timestep`（1/60）。这样物理每一步的 dt 恒定，慢放只是让物理 tick 触发得更稀疏——模拟结果在任何速度下都确定、一致。**反例（禁止）：** 把慢放实现成"把传给 rapier 的 dt 从 1/60 改小"，会导致约束求解迭代与误差积累随速度变化，出现"慢放时弹簧变软、该穿的不穿"等物理不一致。好消息：`src/core/time.rs` 现有实现已经是正确写法（缩放累加器），接键位时保持这个结构即可。
+验收：能在开枪击中箱子塔的瞬间暂停，逐帧慢放看它散开，且慢放下的碰撞行为与正常速度一致。
+
+### L2. 上帝模式（自由飞行）
+类 MC 创造模式：按键从玩家身体切换到自由飞行相机，鼠标解锁/或保持准星，可俯瞰与穿行。可在设置菜单开关此功能。用现有 `Schedule` 换系统 + `MouseLocked` 控制光标实现。
+验收：游戏中一键在"第一人称走 dust2"与"自由飞行俯瞰全场"之间来回切换，物理世界不中断。
+
+### L3. 上帝之手交互
+在上帝模式（也可在 FPS 模式）下：射线点选任意刚体、拖动、施加冲量、生成/删除。抓取投掷已有雏形，扩展为更自由的"造物主操作"。
+验收：飞到半空，点住一个箱子拖到别处、松手让它落下；对着箱子墙"扇一巴掌"（施加冲量）看它飞散。
+
+### L4. 物理可视化图层 ✅（2026-07-26 完成）
+F3 碰撞体线框 / F4 速度矢量 / F5 接触点 / **F6 冲量箭头**（apply_impulse 事件记录，物理时钟老化衰减，暂停时冻结——配合单步可逐帧看力如何传播）。调试面板（F1）逐项开关。
+原验收已达成：向箱子塔开一枪并慢放，能同时看到冲量方向、各块速度矢量、碰撞点。
+
+> **拆分与提前**：本层里最基础的一项——**碰撞体线框绘制**——建议提前到 L1/L2 期间就做。rapier3d 内置 `DebugRenderPipeline`，能直接输出世界中所有碰撞体 / 关节的线框顶点数据；在 wgpu 里加一个"只画纯色线条"的 render pass 即可消费它，成本很低。越早能看见"看不见的碰撞盒"，后面做上帝之手交互（L3）时排错越快。力 / 速度矢量这类更花哨的可视化再留在本层正式做。
+
+### L5. 渲染表现打磨与风格化
+现有 PBR/IBL/SSAO/Bloom/ACES 已覆盖主管线，此层做减法与调味：纯色/风格化材质撑起画面（不依赖外部美术）、打磨光照与后处理参数、让观感接近参考截图的"通透感"。
+验收：不引入外部美术资源，仅靠材质与打光，画面达到"通透、不塑料"的观感。
+
+### L6. 标准模型导入推进
+把 glTF loader 从"能读静态 mesh"推进到"尊重 node transform 与 primitive material"，让数据驱动场景能引用导入的模型作为"形状"，套刚体进物理世界。
+验收：在场景 JSON 里引用一个下载的 glTF 模型，它进场景、有碰撞、能被推动。
+
+### L7. 多场景与玩法层（按兴趣）
+命令行/菜单切换 `assets/scenes/*.json`，做几张能玩的极简关卡；再按兴趣考虑关卡目标、敌人波次等轻玩法。
+
+### L8+. 远期实验层（见 4.3）
+假动态水面 → 结构破坏（预切碎块 → 约束砖墙）→ 物体行为（布娃娃 / 车辆 / 门）→ 骨骼动画/IK → 更进阶效果。
+
+---
+
+## 7. 技术架构（对齐现有代码）
+
+### 7.1 模块分层（`src/` 实际结构）
+- `src/core`：ECS 包装（hecs）、`Resources` 容器、`Time`、`Schedule` 调度。
+- `src/renderer`：wgpu 初始化、渲染管线、bind group、后处理、SSAO、IBL、光照、overlay（2D 文本覆盖层）。
+- `src/physics`：rapier3d 封装、碰撞形状、射线、物理 sandbox。
+- `src/asset`：网格、材质、纹理、程序化生成、glTF 加载。
+- `src/input`：键盘、鼠标、输入状态。
+- `src/kinematics`：相机控制、后坐力、IK。
+- `src/game`：玩家、武器、敌人、系统注册（`systems/`）、数据驱动场景（`scene/`）。
+- `assets/scenes`：JSON 关卡（`dust2.json` 启动默认并嵌入兜底，`sandbox.json` 物理 playground）。
+- `assets/shaders`：WGSL，主 PBR pass 输出线性 HDR，tone mapping 在后处理完成。
+
+### 7.2 主循环（分阶段调度，固定物理步长）
+```
+handle_event()          # winit 事件 → InputState / 窗口 / 菜单
+update():
+    Time.update()       # 支持 time_scale：慢放/暂停在此生效
+    run PreUpdate / Update
+    if should_fixed_update(): run FixedUpdate   # rapier 物理步进
+    run LateUpdate / PreRender
+render():
+    run Render / PostRender
 ```
 
----
+### 7.3 关于物理与渲染的 Transform 同步（重要经验，写给接手者）
+动态刚体以 **rapier 内部位姿为单一事实来源（Single Source of Truth）**：物理步进后把结果同步回 ECS `Transform` 供渲染读取；不要在系统里对动态体做暴力的双向拷贝，否则在高刷新率下容易出现一帧滞后或抖动。Kinematic / 玩家控制体是例外（由输入驱动写入物理）。
 
-## 10. 设计决策记录
-
-### 10.1 为什么选择成熟的 `hecs` 轻量级库而非完全自研 ECS？
-
-**原因**：
-1. **高性能与借用安全**：Rust 极其严格的借用检查使得在多线程和复杂 System 调度中，自研稀疏集容器极易陷入所有权分配陷阱。`hecs` 采用紧凑高效的 Archetype (原型) 内存结构设计，提供线程安全且零开销 of 借用方案。
-2. **专注于核心能力开发**：不重复造轮子，使开发焦点从底层内存安全性问题，移向高画质 PBR 渲染、全向阴影、音频与第一人称 FPS 精密动力学控制上。
-3. **极佳的解耦性**：`hecs` 没有任何引擎框架性绑定，能以最轻量的状态放入我们的 `gxengine-core` 组件。
-
-### 10.2 为什么选择 rapier3d 而非 Jolt？
-
-**原因**：
-1. Rust 原生：无需 C++ 绑定
-2. 社区活跃：文档和示例丰富
-3. 性能足够：满足项目需求
-
-### 10.3 为什么采用前向渲染而非延迟渲染？
-
-**原因**：
-1. 实现简单：适合原型开发
-2. 兼容性好：支持透明物体
-3. 性能足够：场景复杂度不高
-
-**未来改进**：
-- 可切换到延迟渲染
-- 添加更多光照类型
-- 实现全局光照
+### 7.4 技术选型原则
+- 优先"能更快看到直观结果"的方案；优先复用已引入的库，不为用不上的能力提前重构（见 4.2）。
+- 内核（物理/图形抽象）借成熟库；表现与玩法自己写。
+- 游戏逻辑用 Rust 硬编码，不引脚本语言。
 
 ---
 
-## 11. 附录
+## 8. 成功标准
 
-### 11.1 参考资源
+本项目没有"完成"的终点（它是持续生长的学习工具），但可用阶段性标准衡量健康度：
 
-- [wgpu 官方文档](https://docs.rs/wgpu)
-- [rapier3d 官方文档](https://rapier.rs/docs/)
-- [glTF 2.0 规范](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html)
-- [ECS 设计模式](https://github.com/SanderMertens/ecs-faq)
+- **能玩**：FPS 模式稳定运行，走关卡、开枪、抓取投掷、打假人手感成立。
+- **能观察**：可暂停/单步/慢放，可切上帝模式自由飞行俯瞰，能把力/速度/碰撞可视化。
+- **好看**：实时渲染达到"通透、不塑料"的观感，且在动态物体上成立。
+- **能长**：新实验（水面、破坏、模型导入等）能在不推翻底座、不重写核心的前提下逐层加上。
 
-### 11.2 术语表
-
-| 术语 | 说明 |
-|------|------|
-| ECS | Entity-Component-System，实体-组件-系统架构 |
-| PBR | Physically Based Rendering，基于物理的渲染 |
-| IK | Inverse Kinematics，逆向运动学 |
-| G-Buffer | Geometry Buffer，几何缓冲区 |
-| WGSL | WebGPU Shading Language，WebGPU 着色器语言 |
-| SoA | Structure of Arrays，数组结构 |
-| AoS | Array of Structures，结构数组 |
+只要作者还能在这个底座上快速试出新想法、立刻看到结果，并对物理/渲染多懂一点，项目就是成功的。
 
 ---
 
-*文档版本：1.0*  
-*最后更新：2026-05-26*  
-*作者：GxEngine Team*
+## 9. 远期选项与已知风险（记录，不现在动）
+
+这一节收纳几条"技术上有道理、但现在动收益配不上成本"的想法与风险提示。写下来是为了：将来真的撞上对应痛点时，知道有这条路可走；同时明确告诉接手者——**现在不要主动去做这些**。
+
+**9.1 场景格式：JSON → RON（可选，暂不迁移）。**
+RON（Rusty Object Notation）表达 Rust 的带数据枚举比 JSON 干净得多（如 `Cuboid(half_extents: (1.0, 1.0, 1.0))` vs 一坨嵌套对象），且单人自用不必顾虑他人。但现有 JSON 场景**已经在跑**，还配了嵌入二进制兜底、手写友好格式。为"更优雅"重写整个 serde 层并迁移所有场景文件，收益配不上成本。**触发条件**：当场景 schema 开始大量使用带数据枚举、JSON 写着明显难受时，再评估迁移。
+
+**9.2 逻辑热重载（可选，排在 egui 之后）。**
+Rust 编译慢，"只想改一条受力公式看效果却要重启等编译"会打断心流。理论上可把 `systems` 逻辑层剥离成动态库（`.dll`/`.so`）用 `hot-lib-reloader` 之类做热重载，保持底层引擎不停机。但这是侵入性很强的架构改造（系统跨边界、状态外置），对学习型项目是找罪受。**更重要的是：先做 egui（见第 3 节"计划引入"）能覆盖 80% 的"改参数看效果"需求——可调项做成滑块，根本不用重编译。** 因此热重载明确排在 egui 之后，且非必须。
+
+**9.3 ECS 选型 hecs 的已知局限（远期风险提示）。**
+hecs 小而快，但更新较停滞，且反射 / 动态组件遍历较弱。**风险场景**：将来若想做一个"点选一个箱子，在面板上列出它身上所有组件和数值"的检视面板（Inspector，类似 Unity），hecs 可能需要手写较多模板代码。这**不构成现在换库的理由**（9000+ 行都基于 hecs，且换成 bevy_ecs 属于 4.2 明令禁止的"为用不上的能力重构核心"）。仅作提示：真要做 Inspector 时，先评估在 hecs 上手写注册表的成本，再决定是否值得动核心。

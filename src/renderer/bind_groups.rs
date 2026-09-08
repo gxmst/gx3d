@@ -81,9 +81,13 @@ pub struct MaterialUniforms {
     pub has_normal_map: u32,
     pub emissive_factor: [f32; 3],
     pub has_emissive_map: u32,
+    pub has_metallic_roughness_map: u32,
+    pub is_water: u32,
+    pub _padding: [u32; 2],
 }
 
 impl MaterialUniforms {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         albedo_factor: [f32; 4],
         metallic: f32,
@@ -92,6 +96,8 @@ impl MaterialUniforms {
         has_normal_map: bool,
         emissive_factor: [f32; 3],
         has_emissive_map: bool,
+        has_metallic_roughness_map: bool,
+        is_water: bool,
     ) -> Self {
         Self {
             albedo_factor,
@@ -101,6 +107,9 @@ impl MaterialUniforms {
             has_normal_map: if has_normal_map { 1 } else { 0 },
             emissive_factor,
             has_emissive_map: if has_emissive_map { 1 } else { 0 },
+            has_metallic_roughness_map: if has_metallic_roughness_map { 1 } else { 0 },
+            is_water: if is_water { 1 } else { 0 },
+            _padding: [0; 2],
         }
     }
 }
@@ -257,6 +266,17 @@ impl BindGroupLayouts {
                 // Emissive texture
                 wgpu::BindGroupLayoutEntry {
                     binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // Metallic-roughness texture (glTF convention: G=roughness, B=metallic)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },

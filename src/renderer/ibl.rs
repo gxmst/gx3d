@@ -180,7 +180,6 @@ fn build_prefilter(env: &[Vec3], size: u32, roughness: f32) -> Vec<Vec3> {
                 let u = (x as f32 + 0.5) / size as f32;
                 let v = (y as f32 + 0.5) / size as f32;
                 let n = cube_dir(face, u, v);
-                let r = n;
 
                 let (tangent, bitangent) = if n.dot(Vec3::Y).abs() > 0.999 {
                     let t = n.cross(Vec3::X).normalize();
@@ -190,19 +189,21 @@ fn build_prefilter(env: &[Vec3], size: u32, roughness: f32) -> Vec<Vec3> {
                     (t, n.cross(t))
                 };
 
+                // Remap each hemisphere sample into a cone around the normal
+                // whose aperture grows with roughness (split-sum style, with
+                // the usual N = V = R assumption).
                 let cone = roughness.clamp(0.0, 1.0) * 0.5 * PI;
                 let mut acc = Vec3::ZERO;
                 let mut weight: f32 = 0.0;
                 for s in &dirs {
-                    // Perturb the reflection vector within a cone based on roughness.
-                    let angle = cone * s.z.acos();
+                    let theta = s.z.clamp(-1.0, 1.0).acos() / (0.5 * PI) * cone;
+                    let phi = s.y.atan2(s.x);
                     let local = Vec3::new(
-                        angle.sin() * s.x.atan2(s.y),
-                        angle.sin() * s.y.atan2(s.x),
-                        angle.cos(),
-                    )
-                    .normalize();
-                    let sample_dir = tangent * local.x + bitangent * local.y + r * local.z;
+                        theta.sin() * phi.cos(),
+                        theta.sin() * phi.sin(),
+                        theta.cos(),
+                    );
+                    let sample_dir = tangent * local.x + bitangent * local.y + n * local.z;
                     acc += sample_cube(env, ENV_SIZE, sample_dir);
                     weight += 1.0;
                 }

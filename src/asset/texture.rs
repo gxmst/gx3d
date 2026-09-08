@@ -11,6 +11,9 @@ pub struct Material {
     pub normal_map: Option<Handle<Texture>>,
     pub metallic_roughness_map: Option<Handle<Texture>>,
     pub emissive_map: Option<Handle<Texture>>,
+    /// Enables the dedicated water shading path (fresnel, animated micro
+    /// ripples, whitecap foam) and implies transparency.
+    pub water: bool,
 }
 
 impl Material {
@@ -25,6 +28,7 @@ impl Material {
             normal_map: None,
             metallic_roughness_map: None,
             emissive_map: None,
+            water: false,
         }
     }
 
@@ -39,6 +43,7 @@ impl Material {
             normal_map: None,
             metallic_roughness_map: None,
             emissive_map: None,
+            water: false,
         }
     }
 
@@ -53,6 +58,7 @@ impl Material {
             normal_map: None,
             metallic_roughness_map: None,
             emissive_map: None,
+            water: false,
         }
     }
 
@@ -67,6 +73,7 @@ impl Material {
             normal_map: None,
             metallic_roughness_map: None,
             emissive_map: None,
+            water: false,
         }
     }
 }
@@ -83,8 +90,6 @@ pub struct Texture {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextureFormat {
     Rgba8,
-    Rgb8,
-    Bgra8,
 }
 
 impl Texture {
@@ -100,16 +105,5 @@ impl Texture {
 
     pub fn from_rgba8(name: &str, width: u32, height: u32, data: Vec<u8>) -> Self {
         Self::new(name, width, height, data, TextureFormat::Rgba8)
-    }
-
-    pub fn pixel_count(&self) -> usize {
-        (self.width * self.height) as usize
-    }
-
-    pub fn bytes_per_pixel(&self) -> usize {
-        match self.format {
-            TextureFormat::Rgba8 | TextureFormat::Bgra8 => 4,
-            TextureFormat::Rgb8 => 3,
-        }
     }
 }

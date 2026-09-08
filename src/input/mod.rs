@@ -1,9 +1,3 @@
-pub mod keyboard;
-pub mod mouse;
-
-pub use keyboard::*;
-pub use mouse::*;
-
 use glam::Vec2;
 use std::collections::HashMap;
 use winit::event::{ElementState, MouseButton};
@@ -116,6 +110,13 @@ impl InputState {
     pub fn process_cursor_position(&mut self, position: Vec2) {
         self.mouse_position = position;
     }
+
+    pub fn clear_transient_and_held_input(&mut self) {
+        self.keys.clear();
+        self.mouse_buttons.clear();
+        self.mouse_delta = Vec2::ZERO;
+        self.mouse_scroll = 0.0;
+    }
 }
 
 impl Default for InputState {
@@ -124,31 +125,17 @@ impl Default for InputState {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct MouseSettings {
-    pub sensitivity: f32,
-    pub invert_y: bool,
-}
+#[cfg(test)]
+mod tests {
+    use super::InputState;
+    use winit::{event::ElementState, keyboard::KeyCode};
 
-impl MouseSettings {
-    pub fn new() -> Self {
-        Self {
-            sensitivity: 0.002,
-            invert_y: false,
-        }
-    }
-
-    pub fn apply(&self, delta: Vec2) -> Vec2 {
-        let mut adjusted = delta * self.sensitivity;
-        if self.invert_y {
-            adjusted.y = -adjusted.y;
-        }
-        adjusted
-    }
-}
-
-impl Default for MouseSettings {
-    fn default() -> Self {
-        Self::new()
+    #[test]
+    fn focus_reset_clears_keys_that_may_never_receive_release_events() {
+        let mut input = InputState::default();
+        input.process_key(KeyCode::KeyW, ElementState::Pressed);
+        assert!(input.is_key_pressed(KeyCode::KeyW));
+        input.clear_transient_and_held_input();
+        assert!(!input.is_key_pressed(KeyCode::KeyW));
     }
 }

@@ -1,0 +1,2578 @@
+{
+  "player": {
+    "position": [
+      0.0,
+      2.0,
+      46.0
+    ],
+    "height": 1.7,
+    "move_speed": 9.0,
+    "mouse_sensitivity": 0.0021
+  },
+  "meshes": [
+    {
+      "name": "cube",
+      "source": "cube"
+    },
+    {
+      "name": "sphere",
+      "source": {
+        "sphere": {
+          "segments": 24,
+          "rings": 12
+        }
+      }
+    },
+    {
+      "name": "cylinder",
+      "source": {
+        "cylinder": {
+          "segments": 24
+        }
+      }
+    },
+    {
+      "name": "rifle",
+      "source": "rifle"
+    },
+    {
+      "name": "wedge",
+      "source": "wedge"
+    },
+    {
+      "name": "humanoid",
+      "source": "humanoid"
+    }
+  ],
+  "materials": [
+    {
+      "name": "ground_sand",
+      "color": [
+        0.52,
+        0.46,
+        0.34
+      ],
+      "roughness": 0.95
+    },
+    {
+      "name": "beach_sand",
+      "color": [
+        0.62,
+        0.55,
+        0.4
+      ],
+      "roughness": 0.92
+    },
+    {
+      "name": "seabed_sand",
+      "color": [
+        0.3,
+        0.3,
+        0.24
+      ],
+      "roughness": 0.95
+    },
+    {
+      "name": "shore_rock",
+      "color": [
+        0.34,
+        0.33,
+        0.3
+      ],
+      "roughness": 0.9
+    },
+    {
+      "name": "concrete",
+      "color": [
+        0.55,
+        0.55,
+        0.52
+      ],
+      "roughness": 0.88
+    },
+    {
+      "name": "brick",
+      "color": [
+        0.48,
+        0.24,
+        0.17
+      ],
+      "roughness": 0.85
+    },
+    {
+      "name": "box",
+      "color": [
+        0.58,
+        0.36,
+        0.18
+      ],
+      "roughness": 0.78
+    },
+    {
+      "name": "bouncy_rubber",
+      "color": [
+        0.82,
+        0.12,
+        0.16
+      ],
+      "roughness": 0.88
+    },
+    {
+      "name": "ice",
+      "color": [
+        0.36,
+        0.72,
+        0.96
+      ],
+      "roughness": 0.16
+    },
+    {
+      "name": "heavy_metal",
+      "color": [
+        0.22,
+        0.25,
+        0.28
+      ],
+      "roughness": 0.32,
+      "metallic": 0.92
+    },
+    {
+      "name": "sea_water",
+      "color": [
+        0.03,
+        0.14,
+        0.22
+      ],
+      "roughness": 0.08,
+      "water": true
+    },
+    {
+      "name": "wood_plank",
+      "color": [
+        0.42,
+        0.28,
+        0.15
+      ],
+      "roughness": 0.82
+    },
+    {
+      "name": "barrel_red",
+      "color": [
+        0.72,
+        0.14,
+        0.1
+      ],
+      "roughness": 0.45,
+      "metallic": 0.55
+    },
+    {
+      "name": "dust",
+      "color": [
+        0.45,
+        0.42,
+        0.38
+      ],
+      "roughness": 0.95
+    },
+    {
+      "name": "pier_stone",
+      "color": [
+        0.4,
+        0.4,
+        0.42
+      ],
+      "roughness": 0.9
+    },
+    {
+      "name": "buoy_orange",
+      "color": [
+        0.95,
+        0.45,
+        0.08
+      ],
+      "roughness": 0.5
+    },
+    {
+      "name": "enemy_body",
+      "color": [
+        0.75,
+        0.72,
+        0.68
+      ],
+      "roughness": 0.7
+    },
+    {
+      "name": "sign_glow",
+      "color": [
+        0.9,
+        0.85,
+        0.6
+      ],
+      "roughness": 0.4,
+      "emissive": [
+        1.6,
+        1.4,
+        0.7
+      ]
+    }
+  ],
+  "lights": [
+    {
+      "type": "directional",
+      "direction": [
+        0.35,
+        -1.0,
+        0.25
+      ],
+      "color": [
+        1.0,
+        0.96,
+        0.88
+      ],
+      "intensity": 3.2
+    },
+    {
+      "type": "point",
+      "position": [
+        -52.0,
+        8.0,
+        -30.0
+      ],
+      "color": [
+        1.0,
+        0.75,
+        0.4
+      ],
+      "intensity": 30.0,
+      "range": 40.0
+    },
+    {
+      "type": "point",
+      "position": [
+        55.0,
+        10.0,
+        -35.0
+      ],
+      "color": [
+        0.5,
+        0.8,
+        1.0
+      ],
+      "intensity": 26.0,
+      "range": 45.0
+    },
+    {
+      "type": "point",
+      "position": [
+        0.0,
+        6.0,
+        40.0
+      ],
+      "color": [
+        1.0,
+        0.9,
+        0.7
+      ],
+      "intensity": 18.0,
+      "range": 30.0
+    }
+  ],
+  "entities": [
+    {
+      "name": "ground_west",
+      "mesh": "cube",
+      "material": "ground_sand",
+      "transform": {
+        "position": [
+          -42.5,
+          -3.0,
+          0.0
+        ],
+        "scale": [
+          155.0,
+          6.0,
+          240.0
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            77.5,
+            3.0,
+            120.0
+          ]
+        },
+        "mass": 0.0
+      }
+    },
+    {
+      "name": "seabed",
+      "mesh": "cube",
+      "material": "seabed_sand",
+      "transform": {
+        "position": [
+          87.5,
+          -6.0,
+          0.0
+        ],
+        "scale": [
+          105.0,
+          6.0,
+          120.0
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            52.5,
+            3.0,
+            60.0
+          ]
+        },
+        "mass": 0.0
+      }
+    },
+    {
+      "name": "ground_ne",
+      "mesh": "cube",
+      "material": "ground_sand",
+      "transform": {
+        "position": [
+          87.5,
+          -3.0,
+          90.0
+        ],
+        "scale": [
+          105.0,
+          6.0,
+          60.0
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            52.5,
+            3.0,
+            30.0
+          ]
+        },
+        "mass": 0.0
+      }
+    },
+    {
+      "name": "ground_se",
+      "mesh": "cube",
+      "material": "ground_sand",
+      "transform": {
+        "position": [
+          87.5,
+          -3.0,
+          -90.0
+        ],
+        "scale": [
+          105.0,
+          6.0,
+          60.0
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            52.5,
+            3.0,
+            30.0
+          ]
+        },
+        "mass": 0.0
+      }
+    },
+    {
+      "name": "beach_step_0",
+      "mesh": "cube",
+      "material": "beach_sand",
+      "transform": {
+        "position": [
+          36.5,
+          -3.75,
+          0.0
+        ],
+        "scale": [
+          3.0,
+          6.0,
+          120.0
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            1.5,
+            3.0,
+            60.0
+          ]
+        },
+        "mass": 0.0
+      }
+    },
+    {
+      "name": "beach_step_1",
+      "mesh": "cube",
+      "material": "beach_sand",
+      "transform": {
+        "position": [
+          39.5,
+          -4.5,
+          0.0
+        ],
+        "scale": [
+          3.0,
+          6.0,
+          120.0
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            1.5,
+            3.0,
+            60.0
+          ]
+        },
+        "mass": 0.0
+      }
+    },
+    {
+      "name": "beach_step_2",
+      "mesh": "cube",
+      "material": "beach_sand",
+      "transform": {
+        "position": [
+          42.5,
+          -5.25,
+          0.0
+        ],
+        "scale": [
+          3.0,
+          6.0,
+          120.0
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            1.5,
+            3.0,
+            60.0
+          ]
+        },
+        "mass": 0.0
+      }
+    },
+    {
+      "name": "beach_step_3",
+      "mesh": "cube",
+      "material": "beach_sand",
+      "transform": {
+        "position": [
+          45.5,
+          -6.0,
+          0.0
+        ],
+        "scale": [
+          3.0,
+          6.0,
+          120.0
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            1.5,
+            3.0,
+            60.0
+          ]
+        },
+        "mass": 0.0
+      }
+    },
+    {
+      "name": "debris_box_0",
+      "mesh": "cube",
+      "material": "wood_plank",
+      "transform": {
+        "position": [
+          -51.0,
+          0.45,
+          -35.0
+        ],
+        "scale": [
+          0.7,
+          0.7,
+          0.7
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            0.35,
+            0.35,
+            0.35
+          ]
+        },
+        "mass": 3.0
+      }
+    },
+    {
+      "name": "debris_ball_1",
+      "mesh": "sphere",
+      "material": "bouncy_rubber",
+      "transform": {
+        "position": [
+          -58.91,
+          0.4,
+          -31.42
+        ],
+        "scale": [
+          0.6,
+          0.6,
+          0.6
+        ]
+      },
+      "physics": {
+        "shape": {
+          "sphere": 0.3
+        },
+        "mass": 1.5,
+        "surface": "rubber"
+      }
+    },
+    {
+      "name": "debris_barrel_2",
+      "mesh": "cylinder",
+      "material": "barrel_red",
+      "transform": {
+        "position": [
+          -54.42,
+          0.55,
+          -41.57
+        ],
+        "scale": [
+          0.6,
+          1.1,
+          0.6
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cylinder": [
+            0.3,
+            0.55
+          ]
+        },
+        "mass": 5.0
+      }
+    },
+    {
+      "name": "debris_box_3",
+      "mesh": "cube",
+      "material": "wood_plank",
+      "transform": {
+        "position": [
+          -50.19,
+          0.45,
+          -28.73
+        ],
+        "scale": [
+          0.7,
+          0.7,
+          0.7
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            0.35,
+            0.35,
+            0.35
+          ]
+        },
+        "mass": 3.0
+      }
+    },
+    {
+      "name": "debris_ball_4",
+      "mesh": "sphere",
+      "material": "bouncy_rubber",
+      "transform": {
+        "position": [
+          -64.06,
+          0.4,
+          -36.6
+        ],
+        "scale": [
+          0.6,
+          0.6,
+          0.6
+        ]
+      },
+      "physics": {
+        "shape": {
+          "sphere": 0.3
+        },
+        "mass": 1.5,
+        "surface": "rubber"
+      }
+    },
+    {
+      "name": "debris_barrel_5",
+      "mesh": "cylinder",
+      "material": "barrel_red",
+      "transform": {
+        "position": [
+          -46.14,
+          0.55,
+          -40.64
+        ],
+        "scale": [
+          0.6,
+          1.1,
+          0.6
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cylinder": [
+            0.3,
+            0.55
+          ]
+        },
+        "mass": 5.0
+      }
+    },
+    {
+      "name": "debris_box_6",
+      "mesh": "cube",
+      "material": "wood_plank",
+      "transform": {
+        "position": [
+          -58.06,
+          0.45,
+          -23.6
+        ],
+        "scale": [
+          0.7,
+          0.7,
+          0.7
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            0.35,
+            0.35,
+            0.35
+          ]
+        },
+        "mass": 3.0
+      }
+    },
+    {
+      "name": "debris_ball_7",
+      "mesh": "sphere",
+      "material": "bouncy_rubber",
+      "transform": {
+        "position": [
+          -61.04,
+          0.4,
+          -46.63
+        ],
+        "scale": [
+          0.6,
+          0.6,
+          0.6
+        ]
+      },
+      "physics": {
+        "shape": {
+          "sphere": 0.3
+        },
+        "mass": 1.5,
+        "surface": "rubber"
+      }
+    },
+    {
+      "name": "debris_barrel_8",
+      "mesh": "cylinder",
+      "material": "barrel_red",
+      "transform": {
+        "position": [
+          -41.47,
+          0.55,
+          -30.06
+        ],
+        "scale": [
+          0.6,
+          1.1,
+          0.6
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cylinder": [
+            0.3,
+            0.55
+          ]
+        },
+        "mass": 5.0
+      }
+    },
+    {
+      "name": "debris_box_9",
+      "mesh": "cube",
+      "material": "wood_plank",
+      "transform": {
+        "position": [
+          -58.7,
+          0.45,
+          -33.47
+        ],
+        "scale": [
+          0.7,
+          0.7,
+          0.7
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            0.35,
+            0.35,
+            0.35
+          ]
+        },
+        "mass": 3.0
+      }
+    },
+    {
+      "name": "debris_ball_10",
+      "mesh": "sphere",
+      "material": "bouncy_rubber",
+      "transform": {
+        "position": [
+          -52.75,
+          0.4,
+          -39.8
+        ],
+        "scale": [
+          0.6,
+          0.6,
+          0.6
+        ]
+      },
+      "physics": {
+        "shape": {
+          "sphere": 0.3
+        },
+        "mass": 1.5,
+        "surface": "rubber"
+      }
+    },
+    {
+      "name": "debris_barrel_11",
+      "mesh": "cylinder",
+      "material": "barrel_red",
+      "transform": {
+        "position": [
+          -53.02,
+          0.55,
+          -28.7
+        ],
+        "scale": [
+          0.6,
+          1.1,
+          0.6
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cylinder": [
+            0.3,
+            0.55
+          ]
+        },
+        "mass": 5.0
+      }
+    },
+    {
+      "name": "debris_box_12",
+      "mesh": "cube",
+      "material": "wood_plank",
+      "transform": {
+        "position": [
+          -61.84,
+          0.45,
+          -38.96
+        ],
+        "scale": [
+          0.7,
+          0.7,
+          0.7
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            0.35,
+            0.35,
+            0.35
+          ]
+        },
+        "mass": 3.0
+      }
+    },
+    {
+      "name": "debris_ball_13",
+      "mesh": "sphere",
+      "material": "bouncy_rubber",
+      "transform": {
+        "position": [
+          -46.01,
+          0.4,
+          -36.98
+        ],
+        "scale": [
+          0.6,
+          0.6,
+          0.6
+        ]
+      },
+      "physics": {
+        "shape": {
+          "sphere": 0.3
+        },
+        "mass": 1.5,
+        "surface": "rubber"
+      }
+    },
+    {
+      "name": "debris_barrel_14",
+      "mesh": "cylinder",
+      "material": "barrel_red",
+      "transform": {
+        "position": [
+          -61.04,
+          0.55,
+          -26.41
+        ],
+        "scale": [
+          0.6,
+          1.1,
+          0.6
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cylinder": [
+            0.3,
+            0.55
+          ]
+        },
+        "mass": 5.0
+      }
+    },
+    {
+      "name": "debris_box_15",
+      "mesh": "cube",
+      "material": "wood_plank",
+      "transform": {
+        "position": [
+          -56.52,
+          0.45,
+          -46.7
+        ],
+        "scale": [
+          0.7,
+          0.7,
+          0.7
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            0.35,
+            0.35,
+            0.35
+          ]
+        },
+        "mass": 3.0
+      }
+    },
+    {
+      "name": "debris_ball_16",
+      "mesh": "sphere",
+      "material": "bouncy_rubber",
+      "transform": {
+        "position": [
+          -44.98,
+          0.4,
+          -26.56
+        ],
+        "scale": [
+          0.6,
+          0.6,
+          0.6
+        ]
+      },
+      "physics": {
+        "shape": {
+          "sphere": 0.3
+        },
+        "mass": 1.5,
+        "surface": "rubber"
+      }
+    },
+    {
+      "name": "debris_barrel_17",
+      "mesh": "cylinder",
+      "material": "barrel_red",
+      "transform": {
+        "position": [
+          -69.39,
+          0.55,
+          -34.4
+        ],
+        "scale": [
+          0.6,
+          1.1,
+          0.6
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cylinder": [
+            0.3,
+            0.55
+          ]
+        },
+        "mass": 5.0
+      }
+    },
+    {
+      "name": "debris_box_18",
+      "mesh": "cube",
+      "material": "wood_plank",
+      "transform": {
+        "position": [
+          -52.16,
+          0.45,
+          -37.82
+        ],
+        "scale": [
+          0.7,
+          0.7,
+          0.7
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            0.35,
+            0.35,
+            0.35
+          ]
+        },
+        "mass": 3.0
+      }
+    },
+    {
+      "name": "debris_ball_19",
+      "mesh": "sphere",
+      "material": "bouncy_rubber",
+      "transform": {
+        "position": [
+          -55.24,
+          0.4,
+          -29.71
+        ],
+        "scale": [
+          0.6,
+          0.6,
+          0.6
+        ]
+      },
+      "physics": {
+        "shape": {
+          "sphere": 0.3
+        },
+        "mass": 1.5,
+        "surface": "rubber"
+      }
+    },
+    {
+      "name": "debris_barrel_20",
+      "mesh": "cylinder",
+      "material": "barrel_red",
+      "transform": {
+        "position": [
+          -59.23,
+          0.55,
+          -40.07
+        ],
+        "scale": [
+          0.6,
+          1.1,
+          0.6
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cylinder": [
+            0.3,
+            0.55
+          ]
+        },
+        "mass": 5.0
+      }
+    },
+    {
+      "name": "debris_box_21",
+      "mesh": "cube",
+      "material": "wood_plank",
+      "transform": {
+        "position": [
+          -47.17,
+          0.45,
+          -33.95
+        ],
+        "scale": [
+          0.7,
+          0.7,
+          0.7
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            0.35,
+            0.35,
+            0.35
+          ]
+        },
+        "mass": 3.0
+      }
+    },
+    {
+      "name": "debris_ball_22",
+      "mesh": "sphere",
+      "material": "bouncy_rubber",
+      "transform": {
+        "position": [
+          -62.55,
+          0.4,
+          -29.75
+        ],
+        "scale": [
+          0.6,
+          0.6,
+          0.6
+        ]
+      },
+      "physics": {
+        "shape": {
+          "sphere": 0.3
+        },
+        "mass": 1.5,
+        "surface": "rubber"
+      }
+    },
+    {
+      "name": "debris_barrel_23",
+      "mesh": "cylinder",
+      "material": "barrel_red",
+      "transform": {
+        "position": [
+          -52.7,
+          0.55,
+          -45.24
+        ],
+        "scale": [
+          0.6,
+          1.1,
+          0.6
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cylinder": [
+            0.3,
+            0.55
+          ]
+        },
+        "mass": 5.0
+      }
+    },
+    {
+      "name": "debris_box_24",
+      "mesh": "cube",
+      "material": "wood_plank",
+      "transform": {
+        "position": [
+          -49.13,
+          0.45,
+          -24.76
+        ],
+        "scale": [
+          0.7,
+          0.7,
+          0.7
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            0.35,
+            0.35,
+            0.35
+          ]
+        },
+        "mass": 3.0
+      }
+    },
+    {
+      "name": "debris_ball_25",
+      "mesh": "sphere",
+      "material": "bouncy_rubber",
+      "transform": {
+        "position": [
+          -67.48,
+          0.4,
+          -38.98
+        ],
+        "scale": [
+          0.6,
+          0.6,
+          0.6
+        ]
+      },
+      "physics": {
+        "shape": {
+          "sphere": 0.3
+        },
+        "mass": 1.5,
+        "surface": "rubber"
+      }
+    },
+    {
+      "name": "shed_plank_0",
+      "mesh": "cube",
+      "material": "wood_plank",
+      "transform": {
+        "position": [
+          -42.0,
+          1.2,
+          -22.0
+        ],
+        "scale": [
+          0.3,
+          2.4,
+          1.6
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            0.15,
+            1.2,
+            0.8
+          ]
+        },
+        "mass": 6.0
+      }
+    },
+    {
+      "name": "shed_plank_1",
+      "mesh": "cube",
+      "material": "wood_plank",
+      "transform": {
+        "position": [
+          -41.6,
+          1.3499999999999999,
+          -22.0
+        ],
+        "scale": [
+          0.3,
+          2.4,
+          1.6
+        ],
+        "rotation": [
+          0.0,
+          12.0,
+          0.0
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            0.15,
+            1.2,
+            0.8
+          ]
+        },
+        "mass": 6.0
+      }
+    },
+    {
+      "name": "shed_plank_2",
+      "mesh": "cube",
+      "material": "wood_plank",
+      "transform": {
+        "position": [
+          -41.2,
+          1.5,
+          -22.0
+        ],
+        "scale": [
+          0.3,
+          2.4,
+          1.6
+        ],
+        "rotation": [
+          0.0,
+          24.0,
+          0.0
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            0.15,
+            1.2,
+            0.8
+          ]
+        },
+        "mass": 6.0
+      }
+    },
+    {
+      "name": "shed_plank_3",
+      "mesh": "cube",
+      "material": "wood_plank",
+      "transform": {
+        "position": [
+          -40.8,
+          1.65,
+          -22.0
+        ],
+        "scale": [
+          0.3,
+          2.4,
+          1.6
+        ],
+        "rotation": [
+          0.0,
+          36.0,
+          0.0
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            0.15,
+            1.2,
+            0.8
+          ]
+        },
+        "mass": 6.0
+      }
+    },
+    {
+      "name": "shed_plank_4",
+      "mesh": "cube",
+      "material": "wood_plank",
+      "transform": {
+        "position": [
+          -40.4,
+          1.7999999999999998,
+          -22.0
+        ],
+        "scale": [
+          0.3,
+          2.4,
+          1.6
+        ],
+        "rotation": [
+          0.0,
+          48.0,
+          0.0
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            0.15,
+            1.2,
+            0.8
+          ]
+        },
+        "mass": 6.0
+      }
+    },
+    {
+      "name": "shed_plank_5",
+      "mesh": "cube",
+      "material": "wood_plank",
+      "transform": {
+        "position": [
+          -40.0,
+          1.95,
+          -22.0
+        ],
+        "scale": [
+          0.3,
+          2.4,
+          1.6
+        ],
+        "rotation": [
+          0.0,
+          60.0,
+          0.0
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            0.15,
+            1.2,
+            0.8
+          ]
+        },
+        "mass": 6.0
+      }
+    },
+    {
+      "name": "pier_deck",
+      "mesh": "cube",
+      "material": "wood_plank",
+      "transform": {
+        "position": [
+          38.0,
+          0.9,
+          -38.0
+        ],
+        "scale": [
+          24.0,
+          0.5,
+          5.0
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            12.0,
+            0.25,
+            2.5
+          ]
+        },
+        "mass": 0.0
+      }
+    },
+    {
+      "name": "pier_step",
+      "mesh": "wedge",
+      "material": "pier_stone",
+      "transform": {
+        "position": [
+          24.5,
+          0.45,
+          -38.0
+        ],
+        "scale": [
+          3.0,
+          0.9,
+          5.0
+        ],
+        "rotation": [
+          0.0,
+          180.0,
+          0.0
+        ]
+      },
+      "physics": {
+        "shape": {
+          "wedge": [
+            1.5,
+            0.45,
+            2.5
+          ]
+        },
+        "mass": 0.0
+      }
+    },
+    {
+      "name": "pier_pile_0_0",
+      "mesh": "cylinder",
+      "material": "pier_stone",
+      "transform": {
+        "position": [
+          30.0,
+          -1.1,
+          -40.0
+        ],
+        "scale": [
+          0.4,
+          4.4,
+          0.4
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cylinder": [
+            0.2,
+            2.2
+          ]
+        },
+        "mass": 0.0
+      }
+    },
+    {
+      "name": "pier_pile_0_1",
+      "mesh": "cylinder",
+      "material": "pier_stone",
+      "transform": {
+        "position": [
+          30.0,
+          -1.1,
+          -36.0
+        ],
+        "scale": [
+          0.4,
+          4.4,
+          0.4
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cylinder": [
+            0.2,
+            2.2
+          ]
+        },
+        "mass": 0.0
+      }
+    },
+    {
+      "name": "pier_pile_1_0",
+      "mesh": "cylinder",
+      "material": "pier_stone",
+      "transform": {
+        "position": [
+          38.0,
+          -1.1,
+          -40.0
+        ],
+        "scale": [
+          0.4,
+          4.4,
+          0.4
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cylinder": [
+            0.2,
+            2.2
+          ]
+        },
+        "mass": 0.0
+      }
+    },
+    {
+      "name": "pier_pile_1_1",
+      "mesh": "cylinder",
+      "material": "pier_stone",
+      "transform": {
+        "position": [
+          38.0,
+          -1.1,
+          -36.0
+        ],
+        "scale": [
+          0.4,
+          4.4,
+          0.4
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cylinder": [
+            0.2,
+            2.2
+          ]
+        },
+        "mass": 0.0
+      }
+    },
+    {
+      "name": "pier_pile_2_0",
+      "mesh": "cylinder",
+      "material": "pier_stone",
+      "transform": {
+        "position": [
+          46.0,
+          -1.1,
+          -40.0
+        ],
+        "scale": [
+          0.4,
+          4.4,
+          0.4
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cylinder": [
+            0.2,
+            2.2
+          ]
+        },
+        "mass": 0.0
+      }
+    },
+    {
+      "name": "pier_pile_2_1",
+      "mesh": "cylinder",
+      "material": "pier_stone",
+      "transform": {
+        "position": [
+          46.0,
+          -1.1,
+          -36.0
+        ],
+        "scale": [
+          0.4,
+          4.4,
+          0.4
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cylinder": [
+            0.2,
+            2.2
+          ]
+        },
+        "mass": 0.0
+      }
+    },
+    {
+      "name": "pier_rail_0",
+      "mesh": "cube",
+      "material": "wood_plank",
+      "transform": {
+        "position": [
+          28.0,
+          1.7,
+          -40.3
+        ],
+        "scale": [
+          0.12,
+          1.0,
+          0.12
+        ]
+      }
+    },
+    {
+      "name": "pier_rail_1",
+      "mesh": "cube",
+      "material": "wood_plank",
+      "transform": {
+        "position": [
+          33.0,
+          1.7,
+          -40.3
+        ],
+        "scale": [
+          0.12,
+          1.0,
+          0.12
+        ]
+      }
+    },
+    {
+      "name": "pier_rail_2",
+      "mesh": "cube",
+      "material": "wood_plank",
+      "transform": {
+        "position": [
+          38.0,
+          1.7,
+          -40.3
+        ],
+        "scale": [
+          0.12,
+          1.0,
+          0.12
+        ]
+      }
+    },
+    {
+      "name": "pier_rail_3",
+      "mesh": "cube",
+      "material": "wood_plank",
+      "transform": {
+        "position": [
+          43.0,
+          1.7,
+          -40.3
+        ],
+        "scale": [
+          0.12,
+          1.0,
+          0.12
+        ]
+      }
+    },
+    {
+      "name": "pier_rail_4",
+      "mesh": "cube",
+      "material": "wood_plank",
+      "transform": {
+        "position": [
+          48.0,
+          1.7,
+          -40.3
+        ],
+        "scale": [
+          0.12,
+          1.0,
+          0.12
+        ]
+      }
+    },
+    {
+      "name": "pier_rail_beam",
+      "mesh": "cube",
+      "material": "wood_plank",
+      "transform": {
+        "position": [
+          38.0,
+          2.15,
+          -40.3
+        ],
+        "scale": [
+          24.0,
+          0.1,
+          0.12
+        ]
+      }
+    },
+    {
+      "name": "shore_rock_0",
+      "mesh": "wedge",
+      "material": "shore_rock",
+      "transform": {
+        "position": [
+          33.33,
+          -0.14,
+          -56.06
+        ],
+        "scale": [
+          0.9,
+          0.63,
+          1.17
+        ],
+        "rotation": [
+          0.0,
+          192.9,
+          0.0
+        ]
+      },
+      "physics": {
+        "shape": {
+          "wedge": [
+            0.45,
+            0.32,
+            0.59
+          ]
+        },
+        "mass": 0.0
+      }
+    },
+    {
+      "name": "shore_rock_1",
+      "mesh": "wedge",
+      "material": "shore_rock",
+      "transform": {
+        "position": [
+          32.82,
+          -0.24,
+          -42.81
+        ],
+        "scale": [
+          0.85,
+          0.6,
+          1.11
+        ],
+        "rotation": [
+          0.0,
+          156.1,
+          0.0
+        ]
+      },
+      "physics": {
+        "shape": {
+          "wedge": [
+            0.43,
+            0.3,
+            0.55
+          ]
+        },
+        "mass": 0.0
+      }
+    },
+    {
+      "name": "shore_rock_2",
+      "mesh": "wedge",
+      "material": "shore_rock",
+      "transform": {
+        "position": [
+          33.0,
+          -0.3,
+          -31.58
+        ],
+        "scale": [
+          1.96,
+          1.37,
+          2.54
+        ],
+        "rotation": [
+          0.0,
+          44.6,
+          0.0
+        ]
+      },
+      "physics": {
+        "shape": {
+          "wedge": [
+            0.98,
+            0.69,
+            1.27
+          ]
+        },
+        "mass": 0.0
+      }
+    },
+    {
+      "name": "shore_rock_3",
+      "mesh": "wedge",
+      "material": "shore_rock",
+      "transform": {
+        "position": [
+          35.95,
+          0.06,
+          -17.66
+        ],
+        "scale": [
+          1.61,
+          1.13,
+          2.09
+        ],
+        "rotation": [
+          0.0,
+          142.8,
+          0.0
+        ]
+      },
+      "physics": {
+        "shape": {
+          "wedge": [
+            0.8,
+            0.56,
+            1.05
+          ]
+        },
+        "mass": 0.0
+      }
+    },
+    {
+      "name": "shore_rock_4",
+      "mesh": "wedge",
+      "material": "shore_rock",
+      "transform": {
+        "position": [
+          32.76,
+          0.0,
+          -0.14
+        ],
+        "scale": [
+          1.21,
+          0.84,
+          1.57
+        ],
+        "rotation": [
+          0.0,
+          51.9,
+          0.0
+        ]
+      },
+      "physics": {
+        "shape": {
+          "wedge": [
+            0.6,
+            0.42,
+            0.78
+          ]
+        },
+        "mass": 0.0
+      }
+    },
+    {
+      "name": "shore_rock_5",
+      "mesh": "wedge",
+      "material": "shore_rock",
+      "transform": {
+        "position": [
+          34.2,
+          -0.03,
+          7.71
+        ],
+        "scale": [
+          1.05,
+          0.74,
+          1.37
+        ],
+        "rotation": [
+          0.0,
+          209.4,
+          0.0
+        ]
+      },
+      "physics": {
+        "shape": {
+          "wedge": [
+            0.53,
+            0.37,
+            0.68
+          ]
+        },
+        "mass": 0.0
+      }
+    },
+    {
+      "name": "shore_rock_6",
+      "mesh": "wedge",
+      "material": "shore_rock",
+      "transform": {
+        "position": [
+          34.55,
+          -0.22,
+          23.83
+        ],
+        "scale": [
+          0.89,
+          0.62,
+          1.15
+        ],
+        "rotation": [
+          0.0,
+          21.5,
+          0.0
+        ]
+      },
+      "physics": {
+        "shape": {
+          "wedge": [
+            0.44,
+            0.31,
+            0.58
+          ]
+        },
+        "mass": 0.0
+      }
+    },
+    {
+      "name": "shore_rock_7",
+      "mesh": "wedge",
+      "material": "shore_rock",
+      "transform": {
+        "position": [
+          36.24,
+          -0.3,
+          34.24
+        ],
+        "scale": [
+          1.24,
+          0.87,
+          1.61
+        ],
+        "rotation": [
+          0.0,
+          210.8,
+          0.0
+        ]
+      },
+      "physics": {
+        "shape": {
+          "wedge": [
+            0.62,
+            0.43,
+            0.81
+          ]
+        },
+        "mass": 0.0
+      }
+    },
+    {
+      "name": "shore_rock_8",
+      "mesh": "wedge",
+      "material": "shore_rock",
+      "transform": {
+        "position": [
+          34.15,
+          -0.04,
+          48.72
+        ],
+        "scale": [
+          1.78,
+          1.25,
+          2.31
+        ],
+        "rotation": [
+          0.0,
+          87.9,
+          0.0
+        ]
+      },
+      "physics": {
+        "shape": {
+          "wedge": [
+            0.89,
+            0.62,
+            1.16
+          ]
+        },
+        "mass": 0.0
+      }
+    },
+    {
+      "name": "float_crate_0",
+      "mesh": "cube",
+      "material": "wood_plank",
+      "transform": {
+        "position": [
+          36.0,
+          1.6,
+          -44.0
+        ],
+        "scale": [
+          1.1,
+          1.1,
+          1.1
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            0.55,
+            0.55,
+            0.55
+          ]
+        },
+        "mass": 6.0
+      }
+    },
+    {
+      "name": "float_crate_1",
+      "mesh": "cube",
+      "material": "wood_plank",
+      "transform": {
+        "position": [
+          43.0,
+          1.6,
+          -32.6
+        ],
+        "scale": [
+          1.1,
+          1.1,
+          1.1
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            0.55,
+            0.55,
+            0.55
+          ]
+        },
+        "mass": 6.0
+      }
+    },
+    {
+      "name": "float_crate_2",
+      "mesh": "cube",
+      "material": "wood_plank",
+      "transform": {
+        "position": [
+          50.0,
+          1.6,
+          -41.0
+        ],
+        "scale": [
+          1.1,
+          1.1,
+          1.1
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            0.55,
+            0.55,
+            0.55
+          ]
+        },
+        "mass": 6.0
+      }
+    },
+    {
+      "name": "float_crate_3",
+      "mesh": "cube",
+      "material": "wood_plank",
+      "transform": {
+        "position": [
+          57.0,
+          1.6,
+          -31.4
+        ],
+        "scale": [
+          1.1,
+          1.1,
+          1.1
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            0.55,
+            0.55,
+            0.55
+          ]
+        },
+        "mass": 6.0
+      }
+    },
+    {
+      "name": "buoy_0",
+      "mesh": "sphere",
+      "material": "buoy_orange",
+      "transform": {
+        "position": [
+          58.0,
+          1.4,
+          -28.0
+        ],
+        "scale": [
+          0.9,
+          0.9,
+          0.9
+        ]
+      },
+      "physics": {
+        "shape": {
+          "sphere": 0.45
+        },
+        "mass": 3.0
+      }
+    },
+    {
+      "name": "buoy_1",
+      "mesh": "sphere",
+      "material": "buoy_orange",
+      "transform": {
+        "position": [
+          66.0,
+          1.4,
+          -34.0
+        ],
+        "scale": [
+          0.9,
+          0.9,
+          0.9
+        ]
+      },
+      "physics": {
+        "shape": {
+          "sphere": 0.45
+        },
+        "mass": 3.0
+      }
+    },
+    {
+      "name": "buoy_2",
+      "mesh": "sphere",
+      "material": "buoy_orange",
+      "transform": {
+        "position": [
+          74.0,
+          1.4,
+          -40.0
+        ],
+        "scale": [
+          0.9,
+          0.9,
+          0.9
+        ]
+      },
+      "physics": {
+        "shape": {
+          "sphere": 0.45
+        },
+        "mass": 3.0
+      }
+    },
+    {
+      "name": "float_barrel",
+      "mesh": "cylinder",
+      "material": "barrel_red",
+      "transform": {
+        "position": [
+          52.0,
+          1.6,
+          -46.0
+        ],
+        "scale": [
+          0.7,
+          1.2,
+          0.7
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cylinder": [
+            0.35,
+            0.6
+          ]
+        },
+        "mass": 8.0
+      }
+    },
+    {
+      "name": "sink_block",
+      "mesh": "cube",
+      "material": "heavy_metal",
+      "transform": {
+        "position": [
+          55.0,
+          1.5,
+          -33.0
+        ],
+        "scale": [
+          0.9,
+          0.9,
+          0.9
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            0.45,
+            0.45,
+            0.45
+          ]
+        },
+        "mass": 900.0
+      }
+    },
+    {
+      "name": "boom_barrel_0",
+      "mesh": "cylinder",
+      "material": "barrel_red",
+      "transform": {
+        "position": [
+          -4.5,
+          0.8,
+          -51.0
+        ],
+        "scale": [
+          0.7,
+          1.4,
+          0.7
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cylinder": [
+            0.35,
+            0.7
+          ]
+        },
+        "mass": 10.0
+      },
+      "interaction": {
+        "type": "explosive",
+        "radius": 7.0,
+        "impulse": 30.0
+      }
+    },
+    {
+      "name": "boom_barrel_1",
+      "mesh": "cylinder",
+      "material": "barrel_red",
+      "transform": {
+        "position": [
+          4.5,
+          0.8,
+          -51.5
+        ],
+        "scale": [
+          0.7,
+          1.4,
+          0.7
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cylinder": [
+            0.35,
+            0.7
+          ]
+        },
+        "mass": 10.0
+      },
+      "interaction": {
+        "type": "explosive",
+        "radius": 7.0,
+        "impulse": 30.0
+      }
+    },
+    {
+      "name": "boom_barrel_2",
+      "mesh": "cylinder",
+      "material": "barrel_red",
+      "transform": {
+        "position": [
+          0.0,
+          0.8,
+          -60.5
+        ],
+        "scale": [
+          0.7,
+          1.4,
+          0.7
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cylinder": [
+            0.35,
+            0.7
+          ]
+        },
+        "mass": 10.0
+      },
+      "interaction": {
+        "type": "explosive",
+        "radius": 7.0,
+        "impulse": 30.0
+      }
+    },
+    {
+      "name": "boom_barrel_3",
+      "mesh": "cylinder",
+      "material": "barrel_red",
+      "transform": {
+        "position": [
+          8.0,
+          0.8,
+          -57.0
+        ],
+        "scale": [
+          0.7,
+          1.4,
+          0.7
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cylinder": [
+            0.35,
+            0.7
+          ]
+        },
+        "mass": 10.0
+      },
+      "interaction": {
+        "type": "explosive",
+        "radius": 7.0,
+        "impulse": 30.0
+      }
+    },
+    {
+      "name": "welcome_sign",
+      "mesh": "cube",
+      "material": "sign_glow",
+      "transform": {
+        "position": [
+          0.0,
+          2.6,
+          38.0
+        ],
+        "scale": [
+          6.0,
+          1.2,
+          0.3
+        ]
+      }
+    },
+    {
+      "name": "sign_post_l",
+      "mesh": "cylinder",
+      "material": "heavy_metal",
+      "transform": {
+        "position": [
+          -2.6,
+          1.3,
+          38.0
+        ],
+        "scale": [
+          0.15,
+          2.6,
+          0.15
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cylinder": [
+            0.08,
+            1.3
+          ]
+        },
+        "mass": 0.0
+      }
+    },
+    {
+      "name": "sign_post_r",
+      "mesh": "cylinder",
+      "material": "heavy_metal",
+      "transform": {
+        "position": [
+          2.6,
+          1.3,
+          38.0
+        ],
+        "scale": [
+          0.15,
+          2.6,
+          0.15
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cylinder": [
+            0.08,
+            1.3
+          ]
+        },
+        "mass": 0.0
+      }
+    },
+    {
+      "name": "start_box_0",
+      "mesh": "cube",
+      "material": "box",
+      "transform": {
+        "position": [
+          -3.0,
+          0.5,
+          30.0
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            0.5,
+            0.5,
+            0.5
+          ]
+        },
+        "mass": 4.0
+      }
+    },
+    {
+      "name": "start_box_1",
+      "mesh": "cube",
+      "material": "box",
+      "transform": {
+        "position": [
+          -1.0,
+          0.5,
+          30.0
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            0.5,
+            0.5,
+            0.5
+          ]
+        },
+        "mass": 4.0
+      }
+    },
+    {
+      "name": "start_box_2",
+      "mesh": "cube",
+      "material": "box",
+      "transform": {
+        "position": [
+          1.0,
+          0.5,
+          30.0
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            0.5,
+            0.5,
+            0.5
+          ]
+        },
+        "mass": 4.0
+      }
+    },
+    {
+      "name": "start_box_3",
+      "mesh": "cube",
+      "material": "box",
+      "transform": {
+        "position": [
+          3.0,
+          0.5,
+          30.0
+        ]
+      },
+      "physics": {
+        "shape": {
+          "cuboid": [
+            0.5,
+            0.5,
+            0.5
+          ]
+        },
+        "mass": 4.0
+      }
+    }
+  ],
+  "tornado": {
+    "center": [
+      -55.0,
+      0.0,
+      -35.0
+    ],
+    "radius": 14.0,
+    "height": 30.0,
+    "strength": 300.0,
+    "wander": 7.0
+  },
+  "water": {
+    "center": [
+      95.0,
+      0.4,
+      0.0
+    ],
+    "size": 120.0,
+    "subdivisions": 128,
+    "amplitude": 0.5,
+    "material": "sea_water"
+  },
+  "structures": [
+    {
+      "position": [
+        0.0,
+        0.0,
+        -55.0
+      ],
+      "block_half_extents": [
+        0.55,
+        0.4,
+        0.55
+      ],
+      "blocks": [
+        6,
+        10,
+        6
+      ],
+      "hollow": true,
+      "block_mass": 40.0,
+      "mesh": "cube",
+      "material": "brick"
+    },
+    {
+      "position": [
+        14.0,
+        0.0,
+        -52.0
+      ],
+      "block_half_extents": [
+        0.5,
+        0.35,
+        0.5
+      ],
+      "blocks": [
+        4,
+        6,
+        4
+      ],
+      "hollow": false,
+      "block_mass": 30.0,
+      "mesh": "cube",
+      "material": "concrete"
+    }
+  ],
+  "enemies": {
+    "mesh": "humanoid",
+    "material": "enemy_body",
+    "spawn_points": [
+      [
+        -20.0,
+        1.0,
+        -20.0
+      ],
+      [
+        20.0,
+        1.0,
+        -15.0
+      ]
+    ],
+    "waypoints": [
+      [
+        -20.0,
+        1.0,
+        -20.0
+      ],
+      [
+        0.0,
+        1.0,
+        -30.0
+      ],
+      [
+        20.0,
+        1.0,
+        -15.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0
+      ]
+    ],
+    "routes": []
+  }
+}

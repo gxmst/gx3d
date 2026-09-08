@@ -12,10 +12,18 @@ pub struct PostProcessor {
     pub bind_group_layout: wgpu::BindGroupLayout,
     pub uniform_buffer: wgpu::Buffer,
     pub sampler: wgpu::Sampler,
+    // Rebuilt only when the input targets change (i.e. on resize).
+    bind_group: wgpu::BindGroup,
 }
 
 impl PostProcessor {
-    pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        target_format: wgpu::TextureFormat,
+        hdr_view: &wgpu::TextureView,
+        bloom_view: &wgpu::TextureView,
+        ao_view: &wgpu::TextureView,
+    ) -> Self {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Post Process Bind Group Layout"),
             entries: &[
@@ -152,12 +160,42 @@ impl PostProcessor {
             ..Default::default()
         });
 
+        let bind_group = build_bind_group(
+            device,
+            &bind_group_layout,
+            &uniform_buffer,
+            &sampler,
+            hdr_view,
+            bloom_view,
+            ao_view,
+        );
+
         Self {
             pipeline,
             bind_group_layout,
             uniform_buffer,
             sampler,
+            bind_group,
         }
+    }
+
+    /// Rebind the input targets after they were recreated (window resize).
+    pub fn rebuild_bind_group(
+        &mut self,
+        device: &wgpu::Device,
+        hdr_view: &wgpu::TextureView,
+        bloom_view: &wgpu::TextureView,
+        ao_view: &wgpu::TextureView,
+    ) {
+        self.bind_group = build_bind_group(
+            device,
+            &self.bind_group_layout,
+            &self.uniform_buffer,
+            &self.sampler,
+            hdr_view,
+            bloom_view,
+            ao_view,
+        );
     }
 
     pub fn update_exposure(&self, queue: &wgpu::Queue, exposure: f32) {
@@ -172,48 +210,9 @@ impl PostProcessor {
 
     pub fn render<'a>(
         &'a self,
-        device: &wgpu::Device,
         encoder: &'a mut wgpu::CommandEncoder,
-        hdr_view: &'a wgpu::TextureView,
-        bloom_view: &'a wgpu::TextureView,
-        ao_view: &'a wgpu::TextureView,
         output_view: &'a wgpu::TextureView,
     ) {
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Post Process Bind Group"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.uniform_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(hdr_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(bloom_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: wgpu::BindingResource::TextureView(ao_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
-        });
-
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Post Process Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -232,7 +231,52 @@ impl PostProcessor {
         });
 
         render_pass.set_pipeline(&self.pipeline);
-        render_pass.set_bind_group(0, &bind_group, &[]);
+        render_pass.set_bind_group(0, &self.bind_group, &[]);
         render_pass.draw(0..3, 0..1);
     }
+}
+
+fn build_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    uniform_buffer: &wgpu::Buffer,
+    sampler: &wgpu::Sampler,
+    hdr_view: &wgpu::TextureView,
+    bloom_view: &wgpu::TextureView,
+    ao_view: &wgpu::TextureView,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Post Process Bind Group"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(hdr_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(bloom_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::TextureView(ao_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+        ],
+    })
 }

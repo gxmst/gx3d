@@ -53,13 +53,44 @@ fn aces_tone_map(x: vec3<f32>) -> vec3<f32> {
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
+fn interleaved_gradient_noise(pixel: vec2<f32>) -> f32 {
+    return fract(52.9829189 * fract(dot(pixel, vec2<f32>(0.06711056, 0.00583715))));
+}
+
+fn linear_to_srgb(linear: vec3<f32>) -> vec3<f32> {
+    let low = linear * 12.92;
+    let high = 1.055 * pow(linear, vec3<f32>(1.0 / 2.4)) - 0.055;
+    return select(high, low, linear <= vec3<f32>(0.0031308));
+}
+
+fn srgb_to_linear(encoded: vec3<f32>) -> vec3<f32> {
+    let low = encoded / 12.92;
+    let high = pow((encoded + 0.055) / 1.055, vec3<f32>(2.4));
+    return select(high, low, encoded <= vec3<f32>(0.04045));
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let hdr = textureSample(t_hdr, s_hdr, in.uv).rgb;
     let bloom = textureSample(t_bloom, s_bloom, in.uv).rgb;
     let ao = textureSample(t_ao, s_ao, in.uv).r;
-    let exposed = (hdr + bloom) * params.exposure.x * ao;
-    let mapped = aces_tone_map(exposed);
-    let gamma = pow(mapped, vec3<f32>(1.0 / 2.2));
-    return vec4<f32>(gamma, 1.0);
+    // AO weighs in a little harder than before; grounded contact shading is
+    // most of what separates "clay render" from a lit space.
+    let softened_ao = mix(1.0, ao, 0.52);
+    let exposed = (hdr + bloom * 0.16) * params.exposure.x * softened_ao;
+    var mapped = aces_tone_map(exposed);
+
+    // Subtle grade: a touch of saturation and a soft vignette focus the eye
+    // without reading as a filter.
+    let luma = dot(mapped, vec3<f32>(0.2126, 0.7152, 0.0722));
+    mapped = clamp(mix(vec3<f32>(luma), mapped, 1.07), vec3<f32>(0.0), vec3<f32>(1.0));
+    let offset = in.uv - vec2<f32>(0.5, 0.5);
+    let vignette = 1.0 - dot(offset, offset) * 0.34;
+    mapped *= clamp(vignette, 0.0, 1.0);
+    let dither = (interleaved_gradient_noise(in.clip_position.xy) - 0.5) / 255.0;
+    // Dither by one encoded output step, then return to linear for the sRGB
+    // render target. Linear-space noise is amplified heavily near black.
+    let encoded = linear_to_srgb(mapped);
+    let dithered = clamp(encoded + vec3<f32>(dither), vec3<f32>(0.0), vec3<f32>(1.0));
+    return vec4<f32>(srgb_to_linear(dithered), 1.0);
 }
